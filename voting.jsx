@@ -664,7 +664,7 @@ function VotingAnalysis() {
                         RCV Rounds
                         {condorcetInfo.winner !== 'None' && (
                             <span style={{ fontSize: '12px', fontWeight: 'normal', marginLeft: '8px', color: '#4ade80' }}>
-                                (Condorcet: {getLabel(condorcetInfo.winner)})
+                                (Condorcet Winner: {getLabel(condorcetInfo.winner)})
                             </span>
                         )}
                     </h3>
