@@ -639,10 +639,16 @@ function VotingAnalysis() {
                             </div>
                             {group.matchups.map(({ matchup, result }) => {
                                 const parts = matchup.split(' vs ');
-                                const displayMatchup = `${getLabel(parts[0])} vs ${getLabel(parts[1])}`;
+                                // Ensure current candidate is always first
+                                const opponent = parts[0] === group.candidate ? parts[1] : parts[0];
+                                const isWinner = result.winner === group.candidate;
                                 return (
                                     <div key={matchup} style={{ fontSize: '13px', marginBottom: '3px', marginLeft: '8px', color: '#e2e8f0' }}>
-                                        {displayMatchup}: <strong>{getLabel(result.winner)}</strong> ({result.score})
+                                        {isWinner ? (
+                                            <span><strong>{getLabel(group.candidate)}</strong> vs {getLabel(opponent)}: <strong>{getLabel(result.winner)}</strong> ({result.score})</span>
+                                        ) : (
+                                            <span>{getLabel(group.candidate)} vs <strong>{getLabel(opponent)}</strong>: <strong>{getLabel(result.winner)}</strong> ({result.score})</span>
+                                        )}
                                     </div>
                                 );
                             })}
