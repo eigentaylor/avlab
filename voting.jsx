@@ -437,6 +437,51 @@ function VotingAnalysis() {
 
     const colors = ['#3B82F6', '#10B981', '#F59E0B'];
 
+    // Monte Carlo simulation state
+    const [numSimulations, setNumSimulations] = useState(1000);
+    const [distributionType, setDistributionType] = useState('uniform'); // 'uniform' or 'normal'
+
+    // Monte Carlo simulation for approval voting
+    const monteCarloResults = useMemo(() => {
+        const results = { C1: 0, C2: 0, C3: 0 };
+        
+        for (let sim = 0; sim < numSimulations; sim++) {
+            const approvals = { C1: 0, C2: 0, C3: 0 };
+            
+            // For each simulation, assign each voter bloc a probability of approving candidates
+            voterRankings.forEach(v => {
+                const ranks = v.ranking.split('>');
+                
+                // Always approve top choice (rank 0)
+                approvals[ranks[0]] += v.proportion;
+                
+                // For ranks 1 through second-to-last, draw probabilities
+                // Never approve the last-ranked candidate
+                for (let i = 1; i < ranks.length - 1; i++) {
+                    let prob;
+                    if (distributionType === 'uniform') {
+                        prob = Math.random(); // uniform [0,1]
+                    } else {
+                        // normal distribution, mean=0.5, std=0.2, clamped to [0,1]
+                        const u1 = Math.random();
+                        const u2 = Math.random();
+                        const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+                        prob = Math.max(0, Math.min(1, 0.5 + 0.2 * z));
+                    }
+                    
+                    // Apply this probability to the entire bloc
+                    approvals[ranks[i]] += v.proportion * prob;
+                }
+            });
+            
+            // Find winner
+            const sorted = Object.entries(approvals).sort((a, b) => b[1] - a[1]);
+            results[sorted[0][0]]++;
+        }
+        
+        return results;
+    }, [voterRankings, numSimulations, distributionType]);
+
     // Copy-to-clipboard feedback state
     const [copyStatus, setCopyStatus] = useState('');
 
@@ -766,6 +811,90 @@ function VotingAnalysis() {
                         );
                     })}
                 </div>
+            </div>
+
+            <div style={{ backgroundColor: '#1e3a5f', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #3b82f6' }}>
+                <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#93c5fd' }}>
+                    Monte Carlo Simulation - Approval Voting
+                </h3>
+                <p style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '12px' }}>
+                    Simulates approval voting where each voter bloc always approves their top choice, 
+                    never approves their last choice, and randomly decides whether to approve middle-ranked candidates.
+                </p>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '15px' }}>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                            Number of Simulations:
+                        </label>
+                        <input
+                            type="number"
+                            min="100"
+                            max="10000"
+                            step="100"
+                            value={numSimulations}
+                            onChange={(e) => setNumSimulations(parseInt(e.target.value))}
+                            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
+                        />
+                    </div>
+                    
+                    <div>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                            Probability Distribution:
+                        </label>
+                        <select
+                            value={distributionType}
+                            onChange={(e) => setDistributionType(e.target.value)}
+                            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0', cursor: 'pointer' }}
+                        >
+                            <option value="uniform">Uniform (0 to 1)</option>
+                            <option value="normal">Normal (mean=0.5, std=0.2)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #1e40af' }}>
+                    <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#93c5fd' }}>
+                        Winner Frequency (out of {numSimulations} simulations)
+                    </h4>
+                    {Object.entries(monteCarloResults)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([cand, wins]) => {
+                            const percentage = (wins / numSimulations) * 100;
+                            const maxWins = Math.max(...Object.values(monteCarloResults));
+                            const isWinner = wins === maxWins;
+                            
+                            return (
+                                <div key={cand} style={{ marginBottom: '10px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                        <span style={{ fontSize: '14px', fontWeight: isWinner ? 'bold' : 'normal', color: '#e2e8f0' }}>
+                                            {getLabel(cand)}
+                                            {isWinner && <span style={{ marginLeft: '6px' }}>🏆</span>}
+                                        </span>
+                                        <span style={{ fontSize: '13px', fontWeight: isWinner ? 'bold' : 'normal', color: '#cbd5e1' }}>
+                                            {wins} ({percentage.toFixed(1)}%)
+                                        </span>
+                                    </div>
+                                    <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                        <div 
+                                            style={{ 
+                                                width: percentage + '%', 
+                                                height: '100%', 
+                                                backgroundColor: isWinner ? '#3b82f6' : '#475569',
+                                                transition: 'width 0.3s ease'
+                                            }}
+                                        ></div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                </div>
+                
+                <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
+                    {distributionType === 'uniform' 
+                        ? 'Uniform distribution: Each voter bloc is assigned a random approval probability (0-100%) for middle-ranked candidates in each simulation. Last-ranked candidates are never approved.'
+                        : 'Normal distribution: Blocs tend to approve ~50% for middle-ranked candidates, with variation (std=0.2). Example: a bloc might approve 80% of their 2nd choice in one sim, 30% in another. Last-ranked candidates are never approved.'}
+                </p>
             </div>
 
             <div style={{ backgroundColor: '#1e293b', padding: '15px', borderRadius: '8px', marginTop: '20px', border: '1px solid #0ea5e9' }}>
