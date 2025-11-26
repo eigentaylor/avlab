@@ -12,6 +12,84 @@ function VotingAnalysis() {
     const [label2, setLabel2] = useState('C2');
     const [label3, setLabel3] = useState('C3');
 
+    // --- URL params handling: read initial params, respond to back/forward, and keep URL updated ---
+    const parseAndApplyUrl = (replaceValues = true) => {
+        try {
+            const params = new URLSearchParams(window.location.search);
+
+            const p1 = params.has('c1') ? parseFloat(params.get('c1')) : null;
+            const p2 = params.has('c2') ? parseFloat(params.get('c2')) : null;
+            const p3 = params.has('c3') ? parseFloat(params.get('c3')) : null;
+
+            const l1 = params.get('l1');
+            const l2 = params.get('l2');
+            const l3 = params.get('l3');
+
+            const clamp = (v) => {
+                if (v === null || Number.isNaN(v)) return null;
+                // round to 2 decimals, clamp to [0.01,0.99]
+                return Math.round(Math.max(0.01, Math.min(0.99, v)) * 100) / 100;
+            };
+
+            let nc1 = clamp(p1);
+            let nc2 = clamp(p2);
+            let nc3 = clamp(p3);
+
+            // If any missing, leave as current state (so we need to read current state values)
+            if (nc1 === null) nc1 = c1;
+            if (nc2 === null) nc2 = c2;
+            if (nc3 === null) nc3 = c3;
+
+            // enforce ordering and small gaps
+            nc1 = Math.max(0.01, Math.min(nc1, nc2 - 0.01));
+            nc2 = Math.max(nc1 + 0.01, Math.min(nc2, nc3 - 0.01));
+            nc3 = Math.max(nc2 + 0.01, Math.min(nc3, 0.99));
+
+            if (replaceValues) {
+                setC1(nc1);
+                setC2(nc2);
+                setC3(nc3);
+                if (l1 !== null) setLabel1(l1);
+                if (l2 !== null) setLabel2(l2);
+                if (l3 !== null) setLabel3(l3);
+            }
+        } catch (err) {
+            console.warn('Error parsing URL params', err);
+        }
+    };
+
+    // Read initial params once and respond to back/forward navigation
+    useEffect(() => {
+        parseAndApplyUrl(true);
+
+        const onPop = () => parseAndApplyUrl(true);
+        window.addEventListener('popstate', onPop);
+        return () => window.removeEventListener('popstate', onPop);
+        // Intentionally run only once on mount
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Update the URL whenever positions or labels change
+    useEffect(() => {
+        try {
+            const params = new URLSearchParams(window.location.search);
+            params.set('c1', c1.toFixed(3));
+            params.set('c2', c2.toFixed(3));
+            params.set('c3', c3.toFixed(3));
+
+            if (label1) params.set('l1', label1); else params.delete('l1');
+            if (label2) params.set('l2', label2); else params.delete('l2');
+            if (label3) params.set('l3', label3); else params.delete('l3');
+
+            const newQuery = params.toString();
+            const newUrl = window.location.pathname + (newQuery ? '?' + newQuery : '');
+            // use replaceState so user history isn't flooded with tiny changes
+            window.history.replaceState({}, '', newUrl);
+        } catch (err) {
+            console.warn('Error updating URL params', err);
+        }
+    }, [c1, c2, c3, label1, label2, label3]);
+
     const handlePointerDown = (point) => (e) => {
         e.preventDefault();
         setDragging(point);
@@ -359,6 +437,33 @@ function VotingAnalysis() {
 
     const colors = ['#3B82F6', '#10B981', '#F59E0B'];
 
+    // Copy-to-clipboard feedback state
+    const [copyStatus, setCopyStatus] = useState('');
+
+    const copyUrlToClipboard = async () => {
+        try {
+            const url = window.location.href;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(url);
+            } else {
+                const ta = document.createElement('textarea');
+                ta.value = url;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            }
+            setCopyStatus('Copied!');
+            setTimeout(() => setCopyStatus(''), 2000);
+        } catch (err) {
+            console.warn('Copy failed', err);
+            setCopyStatus('Failed');
+            setTimeout(() => setCopyStatus(''), 2000);
+        }
+    };
+
     return (
         <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'system-ui', backgroundColor: '#0f172a', color: '#e2e8f0', minHeight: '100vh' }}>
             <h1 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px', color: '#f1f5f9' }}>Voting System Analysis</h1>
@@ -525,7 +630,7 @@ function VotingAnalysis() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px', marginBottom: '20px' }}>
                 <div style={{ backgroundColor: '#1e3a5f', padding: '15px', borderRadius: '8px', border: '1px solid #2563eb' }}>
                     <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#93c5fd' }}>
-                        Condorcet: {getLabel(condorcetInfo.winner)}
+                        Condorcet Winner: {getLabel(condorcetInfo.winner)}
                     </h3>
                     {groupedPairwise.map((group, idx) => (
                         <div key={group.candidate}>
@@ -689,6 +794,12 @@ function VotingAnalysis() {
                             style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
                         />
                     </div>
+                </div>
+                <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button onClick={copyUrlToClipboard} style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#0891b2', border: 'none', color: '#e6fffa', fontWeight: '600', cursor: 'pointer' }}>
+                        Copy URL
+                    </button>
+                    <span style={{ color: '#cbd5e1', fontSize: '13px' }}>{copyStatus}</span>
                 </div>
             </div>
         </div>
