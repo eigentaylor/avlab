@@ -682,16 +682,21 @@ function VotingAnalysis() {
                                 <div>
                                     <div style={{ fontWeight: '600', marginBottom: '3px' }}>Round {i + 1}:</div>
                                     {Object.entries(round.votes).sort((a, b) => b[1] - a[1]).map(([c, v], idx) => (
-                                        <div key={c} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <div style={{ width: '32px', display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '2px' }}>
-                                                {round.eliminated === c && <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '16px' }}>✗</span>}
-                                                {idx === 0 && !round.eliminated && <span style={{ fontSize: '14px' }}>⭐</span>}
-                                                {c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
-                                                    <span style={{ fontSize: '14px' }}>🏆</span>
-                                                )}
+                                        <div key={c} style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <div style={{ width: '32px', display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '2px' }}>
+                                                    {round.eliminated === c && <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '16px' }}>✗</span>}
+                                                    {idx === 0 && !round.eliminated && <span style={{ fontSize: '14px' }}>⭐</span>}
+                                                    {c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
+                                                        <span style={{ fontSize: '14px' }}>🏆</span>
+                                                    )}
+                                                </div>
+                                                <div style={{ minWidth: '60px' }}>{getLabel(c)}</div>
+                                                <div>{(v * 100).toFixed(1)}%</div>
                                             </div>
-                                            <div style={{ minWidth: '60px' }}>{getLabel(c)}</div>
-                                            <div>{(v * 100).toFixed(1)}%</div>
+                                            {round.eliminated === c && c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
+                                                <div style={{ fontSize: '11px', color: '#fbbf24', fontStyle: 'italic' }}>(Condorcet Winner Eliminated)</div>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
