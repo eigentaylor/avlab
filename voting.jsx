@@ -675,15 +675,15 @@ function VotingAnalysis() {
                                 <div>
                                     <div style={{ fontWeight: '600', marginBottom: '3px' }}>Round {i + 1}:</div>
                                     {Object.entries(round.votes).sort((a, b) => b[1] - a[1]).map(([c, v]) => (
-                                        <div key={c} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <span>
-                                                {getLabel(c)}
-                                                {round.eliminated === c && <span style={{ color: '#ef4444', fontWeight: 'bold', marginLeft: '6px', fontSize: '16px' }}>✗</span>}
+                                        <div key={c} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <div style={{ width: '32px', display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '2px' }}>
+                                                {round.eliminated === c && <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '16px' }}>✗</span>}
                                                 {c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
-                                                    <span style={{ marginLeft: '4px', fontSize: '14px' }}>🏆</span>
+                                                    <span style={{ fontSize: '14px' }}>🏆</span>
                                                 )}
-                                                : {(v * 100).toFixed(1)}%
-                                            </span>
+                                            </div>
+                                            <div style={{ minWidth: '60px' }}>{getLabel(c)}</div>
+                                            <div>{(v * 100).toFixed(1)}%</div>
                                         </div>
                                     ))}
                                 </div>
