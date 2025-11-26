@@ -466,7 +466,7 @@ function VotingAnalysis() {
 
     return (
         <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'system-ui', backgroundColor: '#0f172a', color: '#e2e8f0', minHeight: '100vh' }}>
-            <h1 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px', color: '#f1f5f9' }}>Voting System Analysis</h1>
+            <h1 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px', color: '#f1f5f9' }}>AVLab - Approval Voting Strategy Analyzer</h1>
 
             <div style={{ marginBottom: '20px' }}>
                 <div style={{ marginBottom: '15px' }}>
