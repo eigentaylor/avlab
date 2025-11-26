@@ -665,19 +665,21 @@ function VotingAnalysis() {
                     {rcv.map((round, i) => (
                         <div key={i} style={{ fontSize: '13px', marginBottom: '8px', color: '#e2e8f0' }}>
                             {round.winner ? (
-                                <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{ fontSize: '16px' }}>🥇</span>
                                     <strong style={{ color: '#4ade80' }}>Winner: {getLabel(round.winner)}</strong>
                                     {round.winner === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
-                                        <span style={{ marginLeft: '6px', fontSize: '16px' }}>🏆</span>
+                                        <span style={{ fontSize: '16px' }}>🏆</span>
                                     )}
                                 </div>
                             ) : (
                                 <div>
                                     <div style={{ fontWeight: '600', marginBottom: '3px' }}>Round {i + 1}:</div>
-                                    {Object.entries(round.votes).sort((a, b) => b[1] - a[1]).map(([c, v]) => (
+                                    {Object.entries(round.votes).sort((a, b) => b[1] - a[1]).map(([c, v], idx) => (
                                         <div key={c} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                             <div style={{ width: '32px', display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '2px' }}>
                                                 {round.eliminated === c && <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '16px' }}>✗</span>}
+                                                {idx === 0 && !round.eliminated && <span style={{ fontSize: '14px' }}>⭐</span>}
                                                 {c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
                                                     <span style={{ fontSize: '14px' }}>🏆</span>
                                                 )}
