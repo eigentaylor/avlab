@@ -49,15 +49,8 @@ function VotingAnalysis() {
             if (nc3 === null) nc3 = c3;
             if (nc4 === null) nc4 = c4;
 
-            // enforce ordering and small gaps based on number of candidates
-            nc1 = Math.max(0.01, Math.min(nc1, nc2 - 0.01));
-            nc2 = Math.max(nc1 + 0.01, Math.min(nc2, nn >= 3 ? nc3 - 0.01 : 0.99));
-            if (nn >= 3) {
-                nc3 = Math.max(nc2 + 0.01, Math.min(nc3, nn >= 4 ? nc4 - 0.01 : 0.99));
-            }
-            if (nn >= 4) {
-                nc4 = Math.max(nc3 + 0.01, Math.min(nc4, 0.99));
-            }
+            // No ordering enforcement - allow candidates to be in any order
+            // The candidates useMemo will handle sorting for display
 
             if (replaceValues) {
                 setNumCandidates(nn);
@@ -578,6 +571,27 @@ function VotingAnalysis() {
         }
     };
 
+    const resetToDefaults = () => {
+        // Reset all state to defaults
+        setNumCandidates(3);
+        setC1(0.2);
+        setC2(0.5);
+        setC3(0.8);
+        setC4(0.95);
+        setLabel1('A');
+        setLabel2('B');
+        setLabel3('C');
+        setLabel4('D');
+        setNumSimulations(1000);
+        setDistributionType('uniform');
+        
+        // Clear URL parameters
+        window.history.replaceState({}, '', window.location.pathname);
+        
+        setCopyStatus('Reset!');
+        setTimeout(() => setCopyStatus(''), 2000);
+    };
+
     return (
         <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'system-ui', backgroundColor: '#0f172a', color: '#e2e8f0', minHeight: '100vh' }}>
             <h1 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px', color: '#f1f5f9' }}>AVLab - Approval Voting Strategy Analyzer</h1>
@@ -1067,6 +1081,9 @@ function VotingAnalysis() {
                 <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <button onClick={copyUrlToClipboard} style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#0891b2', border: 'none', color: '#e6fffa', fontWeight: '600', cursor: 'pointer' }}>
                         Copy URL
+                    </button>
+                    <button onClick={resetToDefaults} style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#dc2626', border: 'none', color: '#fff', fontWeight: '600', cursor: 'pointer' }}>
+                        Reset to Defaults
                     </button>
                     <span style={{ color: '#cbd5e1', fontSize: '13px' }}>{copyStatus}</span>
                 </div>
