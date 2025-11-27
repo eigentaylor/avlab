@@ -10,10 +10,10 @@ function VotingAnalysis() {
     const svgRef = useRef(null);
 
     // Custom candidate labels
-    const [label1, setLabel1] = useState('C1');
-    const [label2, setLabel2] = useState('C2');
-    const [label3, setLabel3] = useState('C3');
-    const [label4, setLabel4] = useState('C4');
+    const [label1, setLabel1] = useState('A');
+    const [label2, setLabel2] = useState('B');
+    const [label3, setLabel3] = useState('C');
+    const [label4, setLabel4] = useState('D');
 
     // --- URL params handling: read initial params, respond to back/forward, and keep URL updated ---
     const parseAndApplyUrl = (replaceValues = true) => {
@@ -170,10 +170,10 @@ function VotingAnalysis() {
         ];
         if (numCandidates >= 3) positions.push({ id: 'C3', pos: c3 });
         if (numCandidates >= 4) positions.push({ id: 'C4', pos: c4 });
-        
+
         // Sort by position to maintain left-to-right ordering
         positions.sort((a, b) => a.pos - b.pos);
-        
+
         const result = {};
         positions.forEach(p => result[p.id] = p.pos);
         return result;
@@ -304,7 +304,7 @@ function VotingAnalysis() {
         const names = Object.keys(candidates);
         const wins = {};
         names.forEach(name => wins[name] = 0);
-        
+
         Object.values(pairwise).forEach(r => wins[r.winner]++);
         const maxWins = Math.max(...Object.values(wins));
 
@@ -388,6 +388,11 @@ function VotingAnalysis() {
     // Convert ranking string to use custom labels (e.g., "C1>C2>C3" → "Alice>Bob>Charlie")
     const formatRanking = (ranking) => {
         return ranking.split('>').map(c => getLabel(c)).join('>');
+    };
+
+    // Convert ranking to use first letter only (for compact display in regions)
+    const formatRankingCompact = (ranking) => {
+        return ranking.split('>').map(c => getLabel(c).charAt(0)).join('>');
     };
 
     // RCV rounds with reverse Borda tiebreaker
@@ -726,7 +731,7 @@ function VotingAnalysis() {
                                         fontFamily="monospace"
                                         fontWeight="600"
                                     >
-                                        {formatRanking(region.ranking)}
+                                        {formatRankingCompact(region.ranking)}
                                     </text>
                                 )}
                             </g>
@@ -1014,7 +1019,7 @@ function VotingAnalysis() {
                             type="text"
                             value={label1}
                             onChange={(e) => setLabel1(e.target.value)}
-                            placeholder="C1"
+                            placeholder="A"
                             style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
                         />
                     </div>
@@ -1026,7 +1031,7 @@ function VotingAnalysis() {
                             type="text"
                             value={label2}
                             onChange={(e) => setLabel2(e.target.value)}
-                            placeholder="C2"
+                            placeholder="B"
                             style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
                         />
                     </div>
@@ -1039,7 +1044,7 @@ function VotingAnalysis() {
                                 type="text"
                                 value={label3}
                                 onChange={(e) => setLabel3(e.target.value)}
-                                placeholder="C3"
+                                placeholder="C"
                                 style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
                             />
                         </div>
@@ -1053,7 +1058,7 @@ function VotingAnalysis() {
                                 type="text"
                                 value={label4}
                                 onChange={(e) => setLabel4(e.target.value)}
-                                placeholder="C4"
+                                placeholder="D"
                                 style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
                             />
                         </div>
