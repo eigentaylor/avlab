@@ -505,10 +505,10 @@ function VotingAnalysis() {
 
     // Monte Carlo simulation for approval voting
     const monteCarloResults = useMemo(() => {
-        const results = { C1: 0, C2: 0, C3: 0 };
+        const results = { C1: 0, C2: 0, C3: 0, C4: 0 };
 
         for (let sim = 0; sim < numSimulations; sim++) {
-            const approvals = { C1: 0, C2: 0, C3: 0 };
+            const approvals = { C1: 0, C2: 0, C3: 0, C4: 0 };
 
             // For each simulation, assign each voter bloc a probability of approving candidates
             voterRankings.forEach(v => {
