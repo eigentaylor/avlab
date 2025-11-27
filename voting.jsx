@@ -31,6 +31,9 @@ function VotingAnalysis() {
             const l3 = params.get('l3');
             const l4 = params.get('l4');
 
+            const st = params.has('st') ? parseFloat(params.get('st')) : null;
+            const bs = params.has('bs') ? (params.get('bs') === '1' || params.get('bs') === 'true') : null;
+
             const clamp = (v) => {
                 if (v === null || Number.isNaN(v)) return null;
                 // round to 2 decimals, clamp to [0.01,0.99]
@@ -62,6 +65,12 @@ function VotingAnalysis() {
                 if (l2 !== null) setLabel2(l2);
                 if (l3 !== null) setLabel3(l3);
                 if (l4 !== null) setLabel4(l4);
+                if (st !== null && !Number.isNaN(st)) {
+                    setSincereThreshold(Math.max(0.01, Math.min(1.0, st)));
+                }
+                if (bs !== null) {
+                    setUseBasicStrategy(Boolean(bs));
+                }
             }
         } catch (err) {
             console.warn('Error parsing URL params', err);
@@ -96,6 +105,9 @@ function VotingAnalysis() {
             if (label3 && numCandidates >= 3) params.set('l3', label3); else params.delete('l3');
             if (label4 && numCandidates >= 4) params.set('l4', label4); else params.delete('l4');
 
+            params.set('st', sincereThreshold.toFixed(3));
+            params.set('bs', useBasicStrategy ? '1' : '0');
+
             const newQuery = params.toString();
             const newUrl = window.location.pathname + (newQuery ? '?' + newQuery : '');
             // use replaceState so user history isn't flooded with tiny changes
@@ -103,7 +115,7 @@ function VotingAnalysis() {
         } catch (err) {
             console.warn('Error updating URL params', err);
         }
-    }, [numCandidates, c1, c2, c3, c4, label1, label2, label3, label4]);
+    }, [numCandidates, c1, c2, c3, c4, label1, label2, label3, label4, sincereThreshold, useBasicStrategy]);
 
     const handlePointerDown = (point) => (e) => {
         e.preventDefault();
@@ -510,6 +522,11 @@ function VotingAnalysis() {
     const sincereMCSimulations = 100;
     const [sincereMCResults, setSincereMCResults] = useState(null);
 
+    // Turn-based simulation state
+    const [turnBasedResults, setTurnBasedResults] = useState(null);
+    const [currentStep, setCurrentStep] = useState(0);
+    const [voterSeed, setVoterSeed] = useState(0); // For redistributing voters
+
     // Monte Carlo simulation for approval voting
     const monteCarloResults = useMemo(() => {
         const results = { C1: 0, C2: 0, C3: 0, C4: 0 };
@@ -559,10 +576,20 @@ function VotingAnalysis() {
         const candNames = Object.keys(candidates);
         const candPositions = candNames.map(name => candidates[name]);
 
+        // Simple seeded random number generator
+        const seededRandom = (seed) => {
+            let state = seed;
+            return () => {
+                state = (state * 1664525 + 1013904223) % 4294967296;
+                return state / 4294967296;
+            };
+        };
+        const rng = seededRandom(voterSeed);
+
         // Generate uniformly distributed voters
         const voters = [];
         for (let i = 0; i < numVoters; i++) {
-            voters.push(Math.random());
+            voters.push(rng());
         }
 
         // Calculate approval votes for each voter
@@ -627,9 +654,10 @@ function VotingAnalysis() {
             winner,
             maxVotes,
             votesDistribution,
-            totalVoters: numVoters
+            totalVoters: numVoters,
+            voters // Return voters array for turn-based simulation
         };
-    }, [candidates, sincereThreshold, numVoters, useBasicStrategy]);
+    }, [candidates, sincereThreshold, numVoters, useBasicStrategy, voterSeed]);
 
     // Run Monte Carlo simulation for sincere threshold
     const runSincereMonteCarlo = () => {
@@ -685,6 +713,192 @@ function VotingAnalysis() {
         }
 
         setSincereMCResults(winCounts);
+    };
+
+    // Run turn-based AV strategy simulation
+    const runTurnBasedSimulation = () => {
+        const candNames = Object.keys(candidates);
+        const candPositions = candNames.map(name => candidates[name]);
+        const voters = sincereThresholdResults.voters;
+
+        const maxSteps = 10;
+        const epsilon = 0.001;
+        const steps = [];
+
+        // Step 0: Initial sincere voting with current threshold
+        let currentThresholds = voters.map(() => sincereThreshold);
+
+        const computeStep = (thresholds) => {
+            const approvalCounts = {};
+            candNames.forEach(name => approvalCounts[name] = 0);
+
+            const votesPerVoter = [];
+            const ballotCounts = {}; // Track unique ballots and their counts
+
+            voters.forEach((voterPos, voterIdx) => {
+                const voterThreshold = thresholds[voterIdx];
+
+                // Calculate distances to all candidates
+                const distances = candNames.map((name, idx) => ({
+                    name,
+                    distance: Math.abs(voterPos - candPositions[idx])
+                }));
+
+                distances.sort((a, b) => a.distance - b.distance);
+
+                let approvedCount = 0;
+                const approvedCandidates = [];
+
+                if (useBasicStrategy) {
+                    // Always approve closest, never approve furthest
+                    approvalCounts[distances[0].name]++;
+                    approvedCandidates.push(distances[0].name);
+                    approvedCount++;
+
+                    // Check middle candidates against threshold
+                    for (let i = 1; i < distances.length - 1; i++) {
+                        if (distances[i].distance <= voterThreshold) {
+                            approvalCounts[distances[i].name]++;
+                            approvedCandidates.push(distances[i].name);
+                            approvedCount++;
+                        }
+                    }
+                } else {
+                    // Approve all candidates within threshold
+                    distances.forEach(d => {
+                        if (d.distance <= voterThreshold) {
+                            approvalCounts[d.name]++;
+                            approvedCandidates.push(d.name);
+                            approvedCount++;
+                        }
+                    });
+                }
+
+                votesPerVoter.push(approvedCount);
+
+                // Create ballot key ordered by voter's preference (distances already sorted)
+                const ballotKey = approvedCandidates.join(',');
+                if (ballotKey) { // Only count non-empty ballots
+                    ballotCounts[ballotKey] = (ballotCounts[ballotKey] || 0) + 1;
+                }
+            });
+
+            // Find winner and viable candidates (within margin of error of 1st place)
+            const sorted = Object.entries(approvalCounts).sort((a, b) => b[1] - a[1]);
+            const winner = sorted[0][0];
+            const firstPlaceVotes = sorted[0][1];
+            const marginOfError = 0.03; // 3% margin
+            
+            // Include all candidates within MOE of first place
+            const threshold = firstPlaceVotes * (1 - marginOfError);
+            const viableCandidates = sorted
+                .filter(([cand, votes]) => votes >= threshold)
+                .map(([cand, votes]) => cand);
+
+            // Count votes distribution
+            const votesDistribution = {};
+            for (let i = 0; i <= candNames.length; i++) {
+                votesDistribution[i] = 0;
+            }
+            votesPerVoter.forEach(count => votesDistribution[count]++);
+
+            // Calculate mean ballot size
+            const meanBallotSize = votesPerVoter.reduce((sum, v) => sum + v, 0) / voters.length;
+
+            return {
+                approvalCounts,
+                winner,
+                viableCandidates,
+                votesDistribution,
+                meanBallotSize,
+                ballotCounts
+            };
+        };
+
+        // Compute initial step
+        const step0 = computeStep(currentThresholds);
+        steps.push({
+            stepNumber: 0,
+            ...step0,
+            thresholds: [...currentThresholds]
+        });
+
+        // Iterate until convergence
+        for (let stepNum = 1; stepNum <= maxSteps; stepNum++) {
+            const prevStep = steps[steps.length - 1];
+
+            // Each voter adjusts threshold strategically
+            // Viable = within 3% margin of error of first place
+            const newThresholds = voters.map((voterPos) => {
+                const allDistances = candNames.map(candName => ({
+                    name: candName,
+                    distance: Math.abs(voterPos - candidates[candName])
+                }));
+                allDistances.sort((a, b) => a.distance - b.distance);
+                const closest = allDistances[0].name;
+                const closestDist = allDistances[0].distance;
+                
+                if (prevStep.viableCandidates.length === 1) {
+                    // Only one viable candidate (clear frontrunner)
+                    const frontrunner = prevStep.viableCandidates[0];
+                    const frontrunnerDist = Math.abs(voterPos - candidates[frontrunner]);
+                    
+                    if (closest === frontrunner) {
+                        // Case 1: Frontrunner is first choice - bullet vote (approve only frontrunner)
+                        return frontrunnerDist + epsilon;
+                    } else if (frontrunnerDist <= sincereThreshold) {
+                        // Case 2: Frontrunner not first but within sincere threshold
+                        // Approve frontrunner and everyone preferred to them
+                        return frontrunnerDist + epsilon;
+                    } else {
+                        // Case 3: Frontrunner not in sincere threshold
+                        // Approve everyone strictly preferred to frontrunner (at least closest)
+                        return frontrunnerDist - epsilon;
+                    }
+                } else {
+                    // Multiple viable candidates
+                    // Strategy: approve closest viable candidate
+                    const viableDistances = prevStep.viableCandidates.map(candName => ({
+                        name: candName,
+                        distance: Math.abs(voterPos - candidates[candName])
+                    }));
+                    viableDistances.sort((a, b) => a.distance - b.distance);
+                    const closestViableDist = viableDistances[0].distance;
+                    
+                    return closestViableDist + epsilon;
+                }
+            });
+
+            const currentStep = computeStep(newThresholds);
+            steps.push({
+                stepNumber: stepNum,
+                ...currentStep,
+                thresholds: [...newThresholds]
+            });
+
+            // Check for convergence: no voter changed their ballot
+            // Compare ballot counts between steps - if identical, no one changed
+            const prevBallots = Object.keys(prevStep.ballotCounts).sort().join('|');
+            const currBallots = Object.keys(currentStep.ballotCounts).sort().join('|');
+            const ballotsMatch = prevBallots === currBallots &&
+                Object.keys(prevStep.ballotCounts).every(
+                    ballot => prevStep.ballotCounts[ballot] === currentStep.ballotCounts[ballot]
+                );
+            
+            if (ballotsMatch) {
+                break;
+            }
+        }
+
+        setTurnBasedResults(steps);
+        setCurrentStep(steps.length - 1); // Show final step by default
+    };
+
+    const redistributeVoters = () => {
+        setVoterSeed(prev => prev + 1);
+        setTurnBasedResults(null);
+        setSincereMCResults(null);
+        setCurrentStep(0);
     };
 
     const copyUrlToClipboard = async () => {
@@ -1217,6 +1431,21 @@ function VotingAnalysis() {
                 </div>
 
                 <div style={{ marginBottom: '15px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                        onClick={redistributeVoters}
+                        style={{
+                            padding: '8px 16px',
+                            borderRadius: '6px',
+                            backgroundColor: '#0891b2',
+                            border: 'none',
+                            color: '#fff',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            fontSize: '13px'
+                        }}
+                    >
+                        Redistribute Voters
+                    </button>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <label style={{ fontSize: '13px', fontWeight: '600', color: '#cbd5e1' }}>
                             Monte Carlo Sims: {sincereMCSimulations}
@@ -1236,6 +1465,21 @@ function VotingAnalysis() {
                         }}
                     >
                         Run Monte Carlo
+                    </button>
+                    <button
+                        onClick={runTurnBasedSimulation}
+                        style={{
+                            padding: '8px 16px',
+                            borderRadius: '6px',
+                            backgroundColor: '#7c3aed',
+                            border: 'none',
+                            color: '#fff',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            fontSize: '13px'
+                        }}
+                    >
+                        Run Turn-Based Simulation
                     </button>
                     {sincereMCResults && (
                         <button
@@ -1411,6 +1655,203 @@ function VotingAnalysis() {
                             })}
                         <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
                             Each simulation randomly distributes {numVoters} voters across [0,1] and determines the winner.
+                        </p>
+                    </div>
+                )}
+
+                {turnBasedResults && (
+                    <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #7c3aed', marginTop: '15px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                            <h4 style={{ fontSize: '14px', fontWeight: 'bold', color: '#c4b5fd' }}>
+                                Turn-Based Simulation Results
+                            </h4>
+                            <button
+                                onClick={() => setTurnBasedResults(null)}
+                                style={{
+                                    padding: '6px 12px',
+                                    borderRadius: '4px',
+                                    backgroundColor: '#475569',
+                                    border: 'none',
+                                    color: '#cbd5e1',
+                                    fontWeight: '600',
+                                    cursor: 'pointer',
+                                    fontSize: '12px'
+                                }}
+                            >
+                                Clear
+                            </button>
+                        </div>
+
+                        <div style={{ backgroundColor: '#1e1b4b', padding: '12px', borderRadius: '4px', marginBottom: '12px' }}>
+                            <div style={{ fontSize: '13px', color: '#e9d5ff', marginBottom: '6px' }}>
+                                <strong>Initial Winner:</strong> {getLabel(turnBasedResults[0].winner)} (Step 0)
+                            </div>
+                            <div style={{ fontSize: '13px', color: '#e9d5ff', marginBottom: '6px' }}>
+                                <strong>Final Winner:</strong> {getLabel(turnBasedResults[turnBasedResults.length - 1].winner)} (Step {turnBasedResults.length - 1})
+                            </div>
+                            <div style={{ fontSize: '13px', color: '#e9d5ff', marginBottom: '6px' }}>
+                                <strong>Viable Candidates (Step {currentStep}):</strong> {turnBasedResults[currentStep].viableCandidates.map(c => getLabel(c)).join(', ')}
+                            </div>
+                            <div style={{ fontSize: '13px', color: '#e9d5ff', marginBottom: '6px' }}>
+                                <strong>Mean Ballot Size:</strong> {turnBasedResults[0].meanBallotSize.toFixed(2)} → {turnBasedResults[turnBasedResults.length - 1].meanBallotSize.toFixed(2)} candidates
+                            </div>
+                            <div style={{ fontSize: '13px', color: '#e9d5ff' }}>
+                                <strong>Converged in {turnBasedResults.length - 1} steps</strong>
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '12px' }}>
+                            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '8px', color: '#cbd5e1' }}>
+                                View Step: {currentStep} / {turnBasedResults.length - 1}
+                            </label>
+                            <input
+                                type="range"
+                                min="0"
+                                max={turnBasedResults.length - 1}
+                                step="1"
+                                value={currentStep}
+                                onChange={(e) => setCurrentStep(parseInt(e.target.value))}
+                                style={{ width: '100%' }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px' }}>
+                            <div>
+                                <h5 style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '10px', color: '#c4b5fd' }}>
+                                    Approval Votes by Candidate (Step {currentStep})
+                                </h5>
+                                {Object.entries(turnBasedResults[currentStep].approvalCounts)
+                                    .sort((a, b) => b[1] - a[1])
+                                    .map(([cand, votes]) => {
+                                        const percentage = (votes / numVoters) * 100;
+                                        const isWinner = cand === turnBasedResults[currentStep].winner;
+
+                                        return (
+                                            <div key={cand} style={{ marginBottom: '10px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                                    <span style={{ fontSize: '14px', fontWeight: isWinner ? 'bold' : 'normal', color: '#e2e8f0' }}>
+                                                        {getLabel(cand)}
+                                                        {isWinner && <span style={{ marginLeft: '6px' }}>🏆</span>}
+                                                    </span>
+                                                    <span style={{ fontSize: '13px', fontWeight: isWinner ? 'bold' : 'normal', color: '#cbd5e1' }}>
+                                                        {votes} ({percentage.toFixed(1)}%)
+                                                    </span>
+                                                </div>
+                                                <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                                    <div
+                                                        style={{
+                                                            width: percentage + '%',
+                                                            height: '100%',
+                                                            backgroundColor: isWinner ? '#7c3aed' : '#475569',
+                                                            transition: 'width 0.3s ease'
+                                                        }}
+                                                    ></div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                            </div>
+
+                            <div>
+                                <h5 style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '10px', color: '#c4b5fd' }}>
+                                    Votes Cast per Voter (Step {currentStep})
+                                </h5>
+                                {Object.entries(turnBasedResults[currentStep].votesDistribution)
+                                    .filter(([count, voters]) => voters > 0)
+                                    .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+                                    .map(([count, voters]) => {
+                                        const percentage = (voters / numVoters) * 100;
+                                        const maxVoters = Math.max(...Object.values(turnBasedResults[currentStep].votesDistribution));
+                                        const relativeWidth = (voters / maxVoters) * 100;
+
+                                        return (
+                                            <div key={count} style={{ marginBottom: '10px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                                    <span style={{ fontSize: '14px', color: '#e2e8f0' }}>
+                                                        {count} {count === '1' ? 'candidate' : 'candidates'}
+                                                    </span>
+                                                    <span style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                                                        {voters} ({percentage.toFixed(1)}%)
+                                                    </span>
+                                                </div>
+                                                <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                                    <div
+                                                        style={{
+                                                            width: relativeWidth + '%',
+                                                            height: '100%',
+                                                            backgroundColor: '#7c3aed',
+                                                            transition: 'width 0.3s ease'
+                                                        }}
+                                                    ></div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: '15px', backgroundColor: '#1e1b4b', padding: '12px', borderRadius: '4px' }}>
+                            <h5 style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '10px', color: '#c4b5fd' }}>
+                                Most Common Ballots (Step {currentStep})
+                            </h5>
+                            <div style={{ fontSize: '12px', color: '#e2e8f0' }}>
+                                {Object.entries(turnBasedResults[currentStep].ballotCounts)
+                                    .sort((a, b) => b[1] - a[1])
+                                    .slice(0, 10)
+                                    .map(([ballot, count]) => {
+                                        const percentage = (count / numVoters) * 100;
+                                        const candidateLabels = ballot.split(',').map(c => getLabel(c)).join(', ');
+                                        return (
+                                            <div key={ballot} style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span style={{ fontFamily: 'monospace', color: '#e9d5ff' }}>
+                                                    [{candidateLabels}]
+                                                </span>
+                                                <span style={{ color: '#cbd5e1', fontSize: '11px' }}>
+                                                    {count} voters ({percentage.toFixed(1)}%)
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                            </div>
+                            <p style={{ fontSize: '10px', color: '#a78bfa', marginTop: '8px', fontStyle: 'italic' }}>
+                                Ballots are ordered by each voter's preference (closest candidate first).
+                            </p>
+                            
+                            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #4c1d95' }}>
+                                <h6 style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#c4b5fd' }}>
+                                    Plurality Vote (if only first choice counted):
+                                </h6>
+                                {(() => {
+                                    // Calculate plurality - count first candidate on each ballot
+                                    const pluralityVotes = {};
+                                    Object.entries(turnBasedResults[currentStep].ballotCounts).forEach(([ballot, count]) => {
+                                        const firstChoice = ballot.split(',')[0]; // First candidate is voter's favorite
+                                        pluralityVotes[firstChoice] = (pluralityVotes[firstChoice] || 0) + count;
+                                    });
+                                    
+                                    const sorted = Object.entries(pluralityVotes).sort((a, b) => b[1] - a[1]);
+                                    const pluralityWinner = sorted[0][0];
+                                    
+                                    return sorted.map(([cand, votes]) => {
+                                        const percentage = (votes / numVoters) * 100;
+                                        const isWinner = cand === pluralityWinner;
+                                        return (
+                                            <div key={cand} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', fontSize: '11px' }}>
+                                                <span style={{ color: isWinner ? '#fbbf24' : '#cbd5e1', fontWeight: isWinner ? 'bold' : 'normal' }}>
+                                                    {getLabel(cand)} {isWinner && '🥇'}
+                                                </span>
+                                                <span style={{ color: '#94a3b8' }}>
+                                                    {votes} ({percentage.toFixed(1)}%)
+                                                </span>
+                                            </div>
+                                        );
+                                    });
+                                })()}
+                            </div>
+                        </div>
+
+                        <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
+                            Each step, voters adjust strategically: viable candidates are within 3% of first place. If multiple are viable, voters approve their closest viable. If only one is viable (clear frontrunner), voters who have the frontrunner within their sincere threshold approve up to and including the frontrunner, while those who don't approve only candidates closer than the frontrunner.
                         </p>
                     </div>
                 )}
