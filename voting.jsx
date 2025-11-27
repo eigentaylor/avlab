@@ -505,8 +505,10 @@ function VotingAnalysis() {
 
     // Sincere threshold simulation state
     const [sincereThreshold, setSincereThreshold] = useState(0.15);
-    const [numVoters, setNumVoters] = useState(100);
+    const [numVoters, setNumVoters] = useState(10000);
     const [useBasicStrategy, setUseBasicStrategy] = useState(false);
+    const sincereMCSimulations = 100;
+    const [sincereMCResults, setSincereMCResults] = useState(null);
 
     // Monte Carlo simulation for approval voting
     const monteCarloResults = useMemo(() => {
@@ -628,6 +630,62 @@ function VotingAnalysis() {
             totalVoters: numVoters
         };
     }, [candidates, sincereThreshold, numVoters, useBasicStrategy]);
+
+    // Run Monte Carlo simulation for sincere threshold
+    const runSincereMonteCarlo = () => {
+        const candNames = Object.keys(candidates);
+        const candPositions = candNames.map(name => candidates[name]);
+        const winCounts = {};
+        candNames.forEach(name => winCounts[name] = 0);
+
+        for (let sim = 0; sim < sincereMCSimulations; sim++) {
+            // Generate uniformly distributed voters for this simulation
+            const voters = [];
+            for (let i = 0; i < numVoters; i++) {
+                voters.push(Math.random());
+            }
+
+            // Calculate approval votes for each voter
+            const approvalCounts = {};
+            candNames.forEach(name => approvalCounts[name] = 0);
+
+            voters.forEach(voterPos => {
+                // Calculate distances to all candidates
+                const distances = candNames.map((name, idx) => ({
+                    name,
+                    distance: Math.abs(voterPos - candPositions[idx])
+                }));
+
+                // Sort by distance
+                distances.sort((a, b) => a.distance - b.distance);
+
+                if (useBasicStrategy) {
+                    // Always approve closest, never approve furthest
+                    approvalCounts[distances[0].name]++;
+
+                    // Check middle candidates against threshold
+                    for (let i = 1; i < distances.length - 1; i++) {
+                        if (distances[i].distance <= sincereThreshold) {
+                            approvalCounts[distances[i].name]++;
+                        }
+                    }
+                } else {
+                    // Approve all candidates within threshold
+                    distances.forEach(d => {
+                        if (d.distance <= sincereThreshold) {
+                            approvalCounts[d.name]++;
+                        }
+                    });
+                }
+            });
+
+            // Find winner for this simulation
+            const sorted = Object.entries(approvalCounts).sort((a, b) => b[1] - a[1]);
+            winCounts[sorted[0][0]]++;
+        }
+
+        setSincereMCResults(winCounts);
+    };
 
     const copyUrlToClipboard = async () => {
         try {
@@ -1020,7 +1078,7 @@ function VotingAnalysis() {
                 </div>
             </div>
 
-            
+
 
             <div style={{ backgroundColor: '#1e3a5f', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #3b82f6' }}>
                 <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#93c5fd' }}>
@@ -1122,7 +1180,7 @@ function VotingAnalysis() {
                         <input
                             type="range"
                             min="10"
-                            max="10000"
+                            max="20000"
                             step="10"
                             value={numVoters}
                             onChange={(e) => setNumVoters(parseInt(e.target.value))}
@@ -1158,11 +1216,79 @@ function VotingAnalysis() {
                     </label>
                 </div>
 
+                <div style={{ marginBottom: '15px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <label style={{ fontSize: '13px', fontWeight: '600', color: '#cbd5e1' }}>
+                            Monte Carlo Sims: {sincereMCSimulations}
+                        </label>
+                    </div>
+                    <button
+                        onClick={runSincereMonteCarlo}
+                        style={{
+                            padding: '8px 16px',
+                            borderRadius: '6px',
+                            backgroundColor: '#0d9488',
+                            border: 'none',
+                            color: '#fff',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            fontSize: '13px'
+                        }}
+                    >
+                        Run Monte Carlo
+                    </button>
+                    {sincereMCResults && (
+                        <button
+                            onClick={() => setSincereMCResults(null)}
+                            style={{
+                                padding: '8px 16px',
+                                borderRadius: '6px',
+                                backgroundColor: '#475569',
+                                border: 'none',
+                                color: '#cbd5e1',
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                fontSize: '13px'
+                            }}
+                        >
+                            Clear Results
+                        </button>
+                    )}
+                </div>
+
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px' }}>
                     <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #0d9488' }}>
                         <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#5eead4' }}>
                             Approval Votes by Candidate
                         </h4>
+                        {/* Show count of voters who cast no approvals, if any */}
+                        {((sincereThresholdResults.votesDistribution && sincereThresholdResults.votesDistribution[0]) || 0) > 0 && (() => {
+                            const noVotes = sincereThresholdResults.votesDistribution[0] || 0;
+                            const percentage = (noVotes / sincereThresholdResults.totalVoters) * 100;
+                            return (
+                                <div key="no-vote" style={{ marginBottom: '10px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                        <span style={{ fontSize: '14px', color: '#e2e8f0' }}>
+                                            No Vote
+                                        </span>
+                                        <span style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                                            {noVotes} ({percentage.toFixed(1)}%)
+                                        </span>
+                                    </div>
+                                    <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                        <div
+                                            style={{
+                                                width: percentage + '%',
+                                                height: '100%',
+                                                backgroundColor: '#6b7280',
+                                                transition: 'width 0.3s ease'
+                                            }}
+                                        ></div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
                         {Object.entries(sincereThresholdResults.approvalCounts)
                             .sort((a, b) => b[1] - a[1])
                             .map(([cand, votes]) => {
@@ -1193,6 +1319,14 @@ function VotingAnalysis() {
                                     </div>
                                 );
                             })}
+
+                        <div style={{ marginTop: '8px', fontSize: '12px', color: '#94a3b8' }}>
+                            {condorcetInfo.winner && condorcetInfo.winner !== 'None' ? (
+                                <span>Condorcet winner: <strong style={{ color: '#60a5fa' }}>{getLabel(condorcetInfo.winner)}</strong></span>
+                            ) : (
+                                <span>No Condorcet winner</span>
+                            )}
+                        </div>
                     </div>
 
                     <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #0d9488' }}>
@@ -1238,6 +1372,48 @@ function VotingAnalysis() {
                         ? 'Basic strategy: Voters always approve their closest candidate and never approve their furthest candidate. Middle candidates are approved if within the threshold.'
                         : 'Without strategy: Voters approve all candidates within their sincere threshold. This could result in approving 0 or all candidates.'}
                 </p>
+
+                {sincereMCResults && (
+                    <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #0d9488', marginTop: '15px' }}>
+                        <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#5eead4' }}>
+                            Monte Carlo Results ({sincereMCSimulations} simulations)
+                        </h4>
+                        {Object.entries(sincereMCResults)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([cand, wins]) => {
+                                const percentage = (wins / sincereMCSimulations) * 100;
+                                const maxWins = Math.max(...Object.values(sincereMCResults));
+                                const isWinner = wins === maxWins;
+
+                                return (
+                                    <div key={cand} style={{ marginBottom: '10px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                            <span style={{ fontSize: '14px', fontWeight: isWinner ? 'bold' : 'normal', color: '#e2e8f0' }}>
+                                                {getLabel(cand)}
+                                                {isWinner && <span style={{ marginLeft: '6px' }}>🏆</span>}
+                                            </span>
+                                            <span style={{ fontSize: '13px', fontWeight: isWinner ? 'bold' : 'normal', color: '#cbd5e1' }}>
+                                                {wins} ({percentage.toFixed(1)}%)
+                                            </span>
+                                        </div>
+                                        <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                            <div
+                                                style={{
+                                                    width: percentage + '%',
+                                                    height: '100%',
+                                                    backgroundColor: isWinner ? '#14b8a6' : '#475569',
+                                                    transition: 'width 0.3s ease'
+                                                }}
+                                            ></div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
+                            Each simulation randomly distributes {numVoters} voters across [0,1] and determines the winner.
+                        </p>
+                    </div>
+                )}
             </div>
 
             <div style={{ backgroundColor: '#1e293b', padding: '15px', borderRadius: '8px', marginTop: '20px', border: '1px solid #0ea5e9' }}>
