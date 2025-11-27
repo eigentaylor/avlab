@@ -1,9 +1,11 @@
 const { useState, useMemo, useRef, useEffect } = React;
 
 function VotingAnalysis() {
+    const [numCandidates, setNumCandidates] = useState(3);
     const [c1, setC1] = useState(0.2);
     const [c2, setC2] = useState(0.5);
     const [c3, setC3] = useState(0.8);
+    const [c4, setC4] = useState(0.95);
     const [dragging, setDragging] = useState(null);
     const svgRef = useRef(null);
 
@@ -11,19 +13,23 @@ function VotingAnalysis() {
     const [label1, setLabel1] = useState('C1');
     const [label2, setLabel2] = useState('C2');
     const [label3, setLabel3] = useState('C3');
+    const [label4, setLabel4] = useState('C4');
 
     // --- URL params handling: read initial params, respond to back/forward, and keep URL updated ---
     const parseAndApplyUrl = (replaceValues = true) => {
         try {
             const params = new URLSearchParams(window.location.search);
 
+            const pn = params.has('n') ? parseInt(params.get('n')) : null;
             const p1 = params.has('c1') ? parseFloat(params.get('c1')) : null;
             const p2 = params.has('c2') ? parseFloat(params.get('c2')) : null;
             const p3 = params.has('c3') ? parseFloat(params.get('c3')) : null;
+            const p4 = params.has('c4') ? parseFloat(params.get('c4')) : null;
 
             const l1 = params.get('l1');
             const l2 = params.get('l2');
             const l3 = params.get('l3');
+            const l4 = params.get('l4');
 
             const clamp = (v) => {
                 if (v === null || Number.isNaN(v)) return null;
@@ -31,27 +37,38 @@ function VotingAnalysis() {
                 return Math.round(Math.max(0.01, Math.min(0.99, v)) * 100) / 100;
             };
 
+            let nn = pn !== null ? Math.max(2, Math.min(4, pn)) : numCandidates;
             let nc1 = clamp(p1);
             let nc2 = clamp(p2);
             let nc3 = clamp(p3);
+            let nc4 = clamp(p4);
 
             // If any missing, leave as current state (so we need to read current state values)
             if (nc1 === null) nc1 = c1;
             if (nc2 === null) nc2 = c2;
             if (nc3 === null) nc3 = c3;
+            if (nc4 === null) nc4 = c4;
 
-            // enforce ordering and small gaps
+            // enforce ordering and small gaps based on number of candidates
             nc1 = Math.max(0.01, Math.min(nc1, nc2 - 0.01));
-            nc2 = Math.max(nc1 + 0.01, Math.min(nc2, nc3 - 0.01));
-            nc3 = Math.max(nc2 + 0.01, Math.min(nc3, 0.99));
+            nc2 = Math.max(nc1 + 0.01, Math.min(nc2, nn >= 3 ? nc3 - 0.01 : 0.99));
+            if (nn >= 3) {
+                nc3 = Math.max(nc2 + 0.01, Math.min(nc3, nn >= 4 ? nc4 - 0.01 : 0.99));
+            }
+            if (nn >= 4) {
+                nc4 = Math.max(nc3 + 0.01, Math.min(nc4, 0.99));
+            }
 
             if (replaceValues) {
+                setNumCandidates(nn);
                 setC1(nc1);
                 setC2(nc2);
                 setC3(nc3);
+                setC4(nc4);
                 if (l1 !== null) setLabel1(l1);
                 if (l2 !== null) setLabel2(l2);
                 if (l3 !== null) setLabel3(l3);
+                if (l4 !== null) setLabel4(l4);
             }
         } catch (err) {
             console.warn('Error parsing URL params', err);
@@ -73,13 +90,18 @@ function VotingAnalysis() {
     useEffect(() => {
         try {
             const params = new URLSearchParams(window.location.search);
+            params.set('n', numCandidates.toString());
             params.set('c1', c1.toFixed(3));
             params.set('c2', c2.toFixed(3));
-            params.set('c3', c3.toFixed(3));
+            if (numCandidates >= 3) params.set('c3', c3.toFixed(3));
+            else params.delete('c3');
+            if (numCandidates >= 4) params.set('c4', c4.toFixed(3));
+            else params.delete('c4');
 
             if (label1) params.set('l1', label1); else params.delete('l1');
             if (label2) params.set('l2', label2); else params.delete('l2');
-            if (label3) params.set('l3', label3); else params.delete('l3');
+            if (label3 && numCandidates >= 3) params.set('l3', label3); else params.delete('l3');
+            if (label4 && numCandidates >= 4) params.set('l4', label4); else params.delete('l4');
 
             const newQuery = params.toString();
             const newUrl = window.location.pathname + (newQuery ? '?' + newQuery : '');
@@ -88,7 +110,7 @@ function VotingAnalysis() {
         } catch (err) {
             console.warn('Error updating URL params', err);
         }
-    }, [c1, c2, c3, label1, label2, label3]);
+    }, [numCandidates, c1, c2, c3, c4, label1, label2, label3, label4]);
 
     const handlePointerDown = (point) => (e) => {
         e.preventDefault();
@@ -104,20 +126,20 @@ function VotingAnalysis() {
         // Handle both mouse and touch events
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
         const x = (clientX - rect.left) / rect.width;
-        const clampedX = Math.max(0, Math.min(1, x));
+        const clampedX = Math.max(0.01, Math.min(0.99, x));
 
         // Round to nearest 0.01 for cleaner values
         const roundedX = Math.round(clampedX * 100) / 100;
 
+        // Allow candidates to be dragged freely across each other
         if (dragging === 'c1') {
-            const newC1 = Math.max(0.01, Math.min(c2 - 0.01, roundedX));
-            setC1(newC1);
+            setC1(roundedX);
         } else if (dragging === 'c2') {
-            const newC2 = Math.max(c1 + 0.01, Math.min(c3 - 0.01, roundedX));
-            setC2(newC2);
-        } else if (dragging === 'c3') {
-            const newC3 = Math.max(c2 + 0.01, Math.min(0.99, roundedX));
-            setC3(newC3);
+            setC2(roundedX);
+        } else if (dragging === 'c3' && numCandidates >= 3) {
+            setC3(roundedX);
+        } else if (dragging === 'c4' && numCandidates >= 4) {
+            setC4(roundedX);
         }
     };
 
@@ -138,38 +160,54 @@ function VotingAnalysis() {
                 document.removeEventListener('touchend', handlePointerUp);
             };
         }
-    }, [dragging, c1, c2, c3]);
+    }, [dragging, c1, c2, c3, c4, numCandidates]);
 
     // Candidate positions (now the primary variables)
     const candidates = useMemo(() => {
-        return {
-            C1: c1,
-            C2: c2,
-            C3: c3
-        };
-    }, [c1, c2, c3]);
+        const positions = [
+            { id: 'C1', pos: c1 },
+            { id: 'C2', pos: c2 }
+        ];
+        if (numCandidates >= 3) positions.push({ id: 'C3', pos: c3 });
+        if (numCandidates >= 4) positions.push({ id: 'C4', pos: c4 });
+        
+        // Sort by position to maintain left-to-right ordering
+        positions.sort((a, b) => a.pos - b.pos);
+        
+        const result = {};
+        positions.forEach(p => result[p.id] = p.pos);
+        return result;
+    }, [c1, c2, c3, c4, numCandidates]);
 
     // Calculate indifference points (where voters are equidistant)
     const indifferencePoints = useMemo(() => {
-        return {
-            x12: (c1 + c2) / 2,  // C1-C2 boundary
-            x23: (c2 + c3) / 2,  // C2-C3 boundary
-            x13: (c1 + c3) / 2   // C1-C3 boundary
+        const points = {
+            x12: (c1 + c2) / 2
         };
-    }, [c1, c2, c3]);
+        if (numCandidates >= 3) {
+            points.x23 = (c2 + c3) / 2;
+            points.x13 = (c1 + c3) / 2;
+        }
+        if (numCandidates >= 4) {
+            points.x34 = (c3 + c4) / 2;
+            points.x14 = (c1 + c4) / 2;
+            points.x24 = (c2 + c4) / 2;
+        }
+        return points;
+    }, [c1, c2, c3, c4, numCandidates]);
 
     // Calculate voter preferences based on distance
     const voterRankings = useMemo(() => {
-        const { C1, C2, C3 } = candidates;
+        const candNames = Object.keys(candidates);
+        const candPositions = Object.values(candidates);
 
         // Find critical points where rankings change
-        const points = [0, 1, C1, C2, C3];
-        const allCands = [C1, C2, C3];
+        const points = [0, 1, ...candPositions];
 
         // Add midpoints between all pairs
-        for (let i = 0; i < 3; i++) {
-            for (let j = i + 1; j < 3; j++) {
-                points.push((allCands[i] + allCands[j]) / 2);
+        for (let i = 0; i < candPositions.length; i++) {
+            for (let j = i + 1; j < candPositions.length; j++) {
+                points.push((candPositions[i] + candPositions[j]) / 2);
             }
         }
 
@@ -180,11 +218,10 @@ function VotingAnalysis() {
         for (let i = 0; i < points.length - 1; i++) {
             const voterPos = (points[i] + points[i + 1]) / 2;
 
-            const dists = [
-                { name: 'C1', dist: Math.abs(voterPos - C1) },
-                { name: 'C2', dist: Math.abs(voterPos - C2) },
-                { name: 'C3', dist: Math.abs(voterPos - C3) }
-            ];
+            const dists = candNames.map(name => ({
+                name,
+                dist: Math.abs(voterPos - candidates[name])
+            }));
 
             dists.sort((a, b) => a.dist - b.dist);
 
@@ -204,11 +241,8 @@ function VotingAnalysis() {
 
     // Calculate ranking regions for visualization
     const rankingRegions = useMemo(() => {
-        const { C1, C2, C3 } = candidates;
-        const { x12, x23, x13 } = indifferencePoints;
-
-        // Critical points are the indifference points, sorted
-        const criticalPoints = [0, x12, x13, x23, 1].sort((a, b) => a - b);
+        const candNames = Object.keys(candidates);
+        const criticalPoints = [0, ...Object.values(indifferencePoints), 1].sort((a, b) => a - b);
 
         // Remove duplicates
         const uniquePoints = [...new Set(criticalPoints)];
@@ -218,11 +252,10 @@ function VotingAnalysis() {
         for (let i = 0; i < uniquePoints.length - 1; i++) {
             const voterPos = (uniquePoints[i] + uniquePoints[i + 1]) / 2;
 
-            const dists = [
-                { name: 'C1', dist: Math.abs(voterPos - C1) },
-                { name: 'C2', dist: Math.abs(voterPos - C2) },
-                { name: 'C3', dist: Math.abs(voterPos - C3) }
-            ];
+            const dists = candNames.map(name => ({
+                name,
+                dist: Math.abs(voterPos - candidates[name])
+            }));
 
             dists.sort((a, b) => a.dist - b.dist);
 
@@ -241,10 +274,10 @@ function VotingAnalysis() {
     // Pairwise comparisons
     const pairwise = useMemo(() => {
         const results = {};
-        const names = ['C1', 'C2', 'C3'];
+        const names = Object.keys(candidates);
 
-        for (let i = 0; i < 3; i++) {
-            for (let j = i + 1; j < 3; j++) {
+        for (let i = 0; i < names.length; i++) {
+            for (let j = i + 1; j < names.length; j++) {
                 const c1 = names[i];
                 const c2 = names[j];
                 let c1Votes = 0;
@@ -264,29 +297,32 @@ function VotingAnalysis() {
         }
 
         return results;
-    }, [voterRankings]);
+    }, [voterRankings, candidates]);
 
     // Condorcet winner and wins count
     const condorcetInfo = useMemo(() => {
-        const wins = { C1: 0, C2: 0, C3: 0 };
+        const names = Object.keys(candidates);
+        const wins = {};
+        names.forEach(name => wins[name] = 0);
+        
         Object.values(pairwise).forEach(r => wins[r.winner]++);
-        const maxWins = Math.max(wins.C1, wins.C2, wins.C3);
+        const maxWins = Math.max(...Object.values(wins));
 
         let winner = 'None';
-        for (let c of ['C1', 'C2', 'C3']) {
-            if (wins[c] === 2) {
+        for (let c of names) {
+            if (wins[c] === names.length - 1) {
                 winner = c;
                 break;
             }
         }
 
         return { winner, wins };
-    }, [pairwise]);
+    }, [pairwise, candidates]);
 
     // Group pairwise matchups by candidate (ordered by strength)
     const groupedPairwise = useMemo(() => {
-        const candidates = ['C1', 'C2', 'C3'];
-        const sortedCandidates = candidates.sort((a, b) =>
+        const candNames = Object.keys(candidates);
+        const sortedCandidates = candNames.sort((a, b) =>
             condorcetInfo.wins[b] - condorcetInfo.wins[a]
         );
 
@@ -318,13 +354,14 @@ function VotingAnalysis() {
         });
 
         return groups;
-    }, [pairwise, condorcetInfo]);
+    }, [pairwise, condorcetInfo, candidates]);
 
     // Calculate reverse Borda count (1 pt for 1st, 2 pts for 2nd, 3 pts for 3rd, etc.)
     // Higher score is worse, used for tiebreaking
     const bordaScores = useMemo(() => {
-        const scores = { C1: 0, C2: 0, C3: 0 };
-        const numCandidates = 3;
+        const names = Object.keys(candidates);
+        const scores = {};
+        names.forEach(name => scores[name] = 0);
 
         voterRankings.forEach(v => {
             const ranks = v.ranking.split('>');
@@ -334,7 +371,7 @@ function VotingAnalysis() {
         });
 
         return scores;
-    }, [voterRankings]);
+    }, [voterRankings, candidates]);
 
     // Borda winner (lowest score wins)
     const bordaWinner = useMemo(() => {
@@ -344,7 +381,7 @@ function VotingAnalysis() {
 
     // Label mapping helper
     const getLabel = (candId) => {
-        const labels = { C1: label1, C2: label2, C3: label3 };
+        const labels = { C1: label1, C2: label2, C3: label3, C4: label4 };
         return labels[candId] || candId;
     };
 
@@ -356,7 +393,7 @@ function VotingAnalysis() {
     // RCV rounds with reverse Borda tiebreaker
     const rcv = useMemo(() => {
         const rounds = [];
-        let remaining = ['C1', 'C2', 'C3'];
+        let remaining = Object.keys(candidates);
         let voters = voterRankings.map(v => ({ ...v }));
 
         while (remaining.length > 1) {
@@ -405,14 +442,16 @@ function VotingAnalysis() {
         }
 
         return rounds;
-    }, [voterRankings, bordaScores]);
+    }, [voterRankings, bordaScores, candidates]);
 
     // AV critical profiles
     const avProfiles = useMemo(() => {
         const profiles = {};
+        const names = Object.keys(candidates);
 
-        ['C1', 'C2', 'C3'].forEach(target => {
-            const approvals = { C1: 0, C2: 0, C3: 0 };
+        names.forEach(target => {
+            const approvals = {};
+            names.forEach(name => approvals[name] = 0);
 
             voterRankings.forEach(v => {
                 const ranks = v.ranking.split('>');
@@ -433,9 +472,34 @@ function VotingAnalysis() {
         });
 
         return profiles;
-    }, [voterRankings]);
+    }, [voterRankings, candidates]);
 
-    const colors = ['#3B82F6', '#10B981', '#F59E0B'];
+    const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444'];
+
+    // Add/Remove candidates handler
+    const addCandidate = () => {
+        if (numCandidates < 4) {
+            setNumCandidates(numCandidates + 1);
+            // Adjust positions if needed to maintain spacing
+            if (numCandidates === 2) {
+                // Adding C3, make sure there's space
+                if (c3 - c2 < 0.01) {
+                    setC3(Math.min(0.99, c2 + 0.1));
+                }
+            } else if (numCandidates === 3) {
+                // Adding C4, make sure there's space
+                if (c4 - c3 < 0.01) {
+                    setC4(Math.min(0.99, c3 + 0.05));
+                }
+            }
+        }
+    };
+
+    const removeCandidate = () => {
+        if (numCandidates > 2) {
+            setNumCandidates(numCandidates - 1);
+        }
+    };
 
     // Monte Carlo simulation state
     const [numSimulations, setNumSimulations] = useState(1000);
@@ -444,17 +508,17 @@ function VotingAnalysis() {
     // Monte Carlo simulation for approval voting
     const monteCarloResults = useMemo(() => {
         const results = { C1: 0, C2: 0, C3: 0 };
-        
+
         for (let sim = 0; sim < numSimulations; sim++) {
             const approvals = { C1: 0, C2: 0, C3: 0 };
-            
+
             // For each simulation, assign each voter bloc a probability of approving candidates
             voterRankings.forEach(v => {
                 const ranks = v.ranking.split('>');
-                
+
                 // Always approve top choice (rank 0)
                 approvals[ranks[0]] += v.proportion;
-                
+
                 // For ranks 1 through second-to-last, draw probabilities
                 // Never approve the last-ranked candidate
                 for (let i = 1; i < ranks.length - 1; i++) {
@@ -468,17 +532,17 @@ function VotingAnalysis() {
                         const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
                         prob = Math.max(0, Math.min(1, 0.5 + 0.2 * z));
                     }
-                    
+
                     // Apply this probability to the entire bloc
                     approvals[ranks[i]] += v.proportion * prob;
                 }
             });
-            
+
             // Find winner
             const sorted = Object.entries(approvals).sort((a, b) => b[1] - a[1]);
             results[sorted[0][0]]++;
         }
-        
+
         return results;
     }, [voterRankings, numSimulations, distributionType]);
 
@@ -513,6 +577,44 @@ function VotingAnalysis() {
         <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'system-ui', backgroundColor: '#0f172a', color: '#e2e8f0', minHeight: '100vh' }}>
             <h1 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px', color: '#f1f5f9' }}>AVLab - Approval Voting Strategy Analyzer</h1>
 
+            <div style={{ marginBottom: '20px', backgroundColor: '#1e293b', padding: '15px', borderRadius: '8px', border: '1px solid #334155' }}>
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', alignItems: 'center' }}>
+                    <span style={{ fontWeight: '600', color: '#f1f5f9' }}>Number of Candidates: {numCandidates}</span>
+                    <button
+                        onClick={removeCandidate}
+                        disabled={numCandidates <= 2}
+                        style={{
+                            padding: '6px 12px',
+                            borderRadius: '4px',
+                            backgroundColor: numCandidates <= 2 ? '#475569' : '#ef4444',
+                            border: 'none',
+                            color: '#fff',
+                            fontWeight: '600',
+                            cursor: numCandidates <= 2 ? 'not-allowed' : 'pointer',
+                            opacity: numCandidates <= 2 ? 0.5 : 1
+                        }}
+                    >
+                        Remove Candidate
+                    </button>
+                    <button
+                        onClick={addCandidate}
+                        disabled={numCandidates >= 4}
+                        style={{
+                            padding: '6px 12px',
+                            borderRadius: '4px',
+                            backgroundColor: numCandidates >= 4 ? '#475569' : '#10b981',
+                            border: 'none',
+                            color: '#fff',
+                            fontWeight: '600',
+                            cursor: numCandidates >= 4 ? 'not-allowed' : 'pointer',
+                            opacity: numCandidates >= 4 ? 0.5 : 1
+                        }}
+                    >
+                        Add Candidate
+                    </button>
+                </div>
+            </div>
+
             <div style={{ marginBottom: '20px' }}>
                 <div style={{ marginBottom: '15px' }}>
                     <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
@@ -536,7 +638,7 @@ function VotingAnalysis() {
                     <input
                         type="range"
                         min={Math.max(0.01, c1 + 0.01)}
-                        max={Math.min(0.99, c3 - 0.01)}
+                        max={numCandidates >= 3 ? Math.min(0.99, c3 - 0.01) : 0.99}
                         step="0.01"
                         value={c2}
                         onChange={e => setC2(parseFloat(e.target.value))}
@@ -544,29 +646,50 @@ function VotingAnalysis() {
                     />
                 </div>
 
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
-                        C3 = {c3.toFixed(3)}
-                    </label>
-                    <input
-                        type="range"
-                        min={Math.max(0.01, c2 + 0.01)}
-                        max="0.99"
-                        step="0.01"
-                        value={c3}
-                        onChange={e => setC3(parseFloat(e.target.value))}
-                        style={{ width: '100%' }}
-                    />
-                </div>
+                {numCandidates >= 3 && (
+                    <div style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
+                            C3 = {c3.toFixed(3)}
+                        </label>
+                        <input
+                            type="range"
+                            min={Math.max(0.01, c2 + 0.01)}
+                            max={numCandidates >= 4 ? Math.min(0.99, c4 - 0.01) : 0.99}
+                            step="0.01"
+                            value={c3}
+                            onChange={e => setC3(parseFloat(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+                )}
+
+                {numCandidates >= 4 && (
+                    <div style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
+                            C4 = {c4.toFixed(3)}
+                        </label>
+                        <input
+                            type="range"
+                            min={Math.max(0.01, c3 + 0.01)}
+                            max="0.99"
+                            step="0.01"
+                            value={c4}
+                            onChange={e => setC4(parseFloat(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+                )}
             </div>
 
             <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #334155' }}>
                 <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '5px', color: '#f1f5f9' }}>Interval [0,1]</h2>
                 <p style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '5px' }}>
-                    <strong>Drag candidates (C1, C2, C3)</strong> to change positions. Indifference points shown in purple.
+                    <strong>Drag candidates</strong> to change positions. Indifference points shown in purple.
                 </p>
                 <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '15px' }}>
-                    Indifference points: X₁₂={(indifferencePoints.x12).toFixed(3)}, X₂₃={(indifferencePoints.x23).toFixed(3)}, X₁₃={(indifferencePoints.x13).toFixed(3)}
+                    Indifference points: {Object.entries(indifferencePoints).map(([key, val], idx) => (
+                        <span key={key}>{idx > 0 ? ', ' : ''}{key.toUpperCase()}={val.toFixed(3)}</span>
+                    ))}
                 </p>
                 <svg ref={svgRef} width="100%" height="160" style={{ display: 'block', cursor: dragging ? 'grabbing' : 'default', touchAction: 'none', backgroundColor: '#0f172a' }}>
                     {/* Ranking regions - showing where each voter type is located */}
@@ -624,48 +747,31 @@ function VotingAnalysis() {
                     <text x="100%" y="75" fontSize="10" textAnchor="end" fill="#e2e8f0">1</text>
 
                     {/* Indifference points (not draggable) */}
-                    <g>
-                        <line x1={indifferencePoints.x12 * 100 + '%'} y1="55" x2={indifferencePoints.x12 * 100 + '%'} y2="65" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="2,2" />
-                        <text x={indifferencePoints.x12 * 100 + '%'} y="50" fontSize="8" fill="#a78bfa" textAnchor="middle">X₁₂</text>
-                    </g>
-
-                    <g>
-                        <line x1={indifferencePoints.x23 * 100 + '%'} y1="55" x2={indifferencePoints.x23 * 100 + '%'} y2="65" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="2,2" />
-                        <text x={indifferencePoints.x23 * 100 + '%'} y="50" fontSize="8" fill="#a78bfa" textAnchor="middle">X₂₃</text>
-                    </g>
-
-                    <g>
-                        <line x1={indifferencePoints.x13 * 100 + '%'} y1="55" x2={indifferencePoints.x13 * 100 + '%'} y2="65" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="2,2" />
-                        <text x={indifferencePoints.x13 * 100 + '%'} y="50" fontSize="8" fill="#a78bfa" textAnchor="middle">X₁₃</text>
-                    </g>
+                    {Object.entries(indifferencePoints).map(([key, value]) => {
+                        const label = key.toUpperCase();
+                        return (
+                            <g key={key}>
+                                <line x1={value * 100 + '%'} y1="55" x2={value * 100 + '%'} y2="65" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="2,2" />
+                                <text x={value * 100 + '%'} y="50" fontSize="8" fill="#a78bfa" textAnchor="middle">{label}</text>
+                            </g>
+                        );
+                    })}
 
                     {/* Candidates (draggable) */}
-                    <g
-                        onPointerDown={handlePointerDown('c1')}
-                        onTouchStart={handlePointerDown('c1')}
-                        style={{ cursor: 'grab', touchAction: 'none' }}
-                    >
-                        <circle cx={candidates.C1 * 100 + '%'} cy="100" r="8" fill={colors[0]} stroke="#1e293b" strokeWidth="2" opacity="0.9" />
-                        <text x={candidates.C1 * 100 + '%'} y="120" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel('C1')}</text>
-                    </g>
-
-                    <g
-                        onPointerDown={handlePointerDown('c2')}
-                        onTouchStart={handlePointerDown('c2')}
-                        style={{ cursor: 'grab', touchAction: 'none' }}
-                    >
-                        <circle cx={candidates.C2 * 100 + '%'} cy="100" r="8" fill={colors[1]} stroke="#1e293b" strokeWidth="2" opacity="0.9" />
-                        <text x={candidates.C2 * 100 + '%'} y="120" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel('C2')}</text>
-                    </g>
-
-                    <g
-                        onPointerDown={handlePointerDown('c3')}
-                        onTouchStart={handlePointerDown('c3')}
-                        style={{ cursor: 'grab', touchAction: 'none' }}
-                    >
-                        <circle cx={candidates.C3 * 100 + '%'} cy="100" r="8" fill={colors[2]} stroke="#1e293b" strokeWidth="2" opacity="0.9" />
-                        <text x={candidates.C3 * 100 + '%'} y="120" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel('C3')}</text>
-                    </g>
+                    {Object.entries(candidates).map(([candId, position], idx) => {
+                        const candKey = candId.toLowerCase();
+                        return (
+                            <g
+                                key={candId}
+                                onPointerDown={handlePointerDown(candKey)}
+                                onTouchStart={handlePointerDown(candKey)}
+                                style={{ cursor: 'grab', touchAction: 'none' }}
+                            >
+                                <circle cx={position * 100 + '%'} cy="100" r="8" fill={colors[idx]} stroke="#1e293b" strokeWidth="2" opacity="0.9" />
+                                <text x={position * 100 + '%'} y="120" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel(candId)}</text>
+                            </g>
+                        );
+                    })}
 
                     {/* Legend for ranking regions */}
                     <text x="0" y="145" fontSize="9" fill="#94a3b8">Voter Rankings by Location</text>
@@ -673,37 +779,6 @@ function VotingAnalysis() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px', marginBottom: '20px' }}>
-                <div style={{ backgroundColor: '#1e3a5f', padding: '15px', borderRadius: '8px', border: '1px solid #2563eb' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#93c5fd' }}>
-                        Condorcet Winner: {getLabel(condorcetInfo.winner)}
-                    </h3>
-                    {groupedPairwise.map((group, idx) => (
-                        <div key={group.candidate}>
-                            <div style={{ fontWeight: 'bold', fontSize: '14px', marginTop: idx > 0 ? '8px' : '0', marginBottom: '4px', color: group.candidate === condorcetInfo.winner ? '#60a5fa' : '#cbd5e1' }}>
-                                {getLabel(group.candidate)} ({group.wins} wins)
-                            </div>
-                            {group.matchups.map(({ matchup, result }) => {
-                                const parts = matchup.split(' vs ');
-                                // Ensure current candidate is always first
-                                const opponent = parts[0] === group.candidate ? parts[1] : parts[0];
-                                const isWinner = result.winner === group.candidate;
-                                return (
-                                    <div key={matchup} style={{ fontSize: '13px', marginBottom: '3px', marginLeft: '8px', color: '#e2e8f0' }}>
-                                        {isWinner ? (
-                                            <span><strong>{getLabel(group.candidate)}</strong> vs {getLabel(opponent)}: <strong>{getLabel(result.winner)}</strong> ({result.score})</span>
-                                        ) : (
-                                            <span>{getLabel(group.candidate)} vs <strong>{getLabel(opponent)}</strong>: <strong>{getLabel(result.winner)}</strong> ({result.score})</span>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                            {idx < groupedPairwise.length - 1 && (
-                                <div style={{ borderTop: '1px solid #3b82f6', marginTop: '6px' }}></div>
-                            )}
-                        </div>
-                    ))}
-                </div>
-
                 <div style={{ backgroundColor: '#14532d', padding: '15px', borderRadius: '8px', border: '1px solid #16a34a' }}>
                     <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#86efac' }}>
                         RCV Rounds
@@ -745,6 +820,37 @@ function VotingAnalysis() {
                                         </div>
                                     ))}
                                 </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+
+                <div style={{ backgroundColor: '#1e3a5f', padding: '15px', borderRadius: '8px', border: '1px solid #2563eb' }}>
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#93c5fd' }}>
+                        Condorcet Winner: {getLabel(condorcetInfo.winner)}
+                    </h3>
+                    {groupedPairwise.map((group, idx) => (
+                        <div key={group.candidate}>
+                            <div style={{ fontWeight: 'bold', fontSize: '14px', marginTop: idx > 0 ? '8px' : '0', marginBottom: '4px', color: group.candidate === condorcetInfo.winner ? '#60a5fa' : '#cbd5e1' }}>
+                                {getLabel(group.candidate)} ({group.wins} wins)
+                            </div>
+                            {group.matchups.map(({ matchup, result }) => {
+                                const parts = matchup.split(' vs ');
+                                // Ensure current candidate is always first
+                                const opponent = parts[0] === group.candidate ? parts[1] : parts[0];
+                                const isWinner = result.winner === group.candidate;
+                                return (
+                                    <div key={matchup} style={{ fontSize: '13px', marginBottom: '3px', marginLeft: '8px', color: '#e2e8f0' }}>
+                                        {isWinner ? (
+                                            <span><strong>{getLabel(group.candidate)}</strong> vs {getLabel(opponent)}: <strong>{getLabel(result.winner)}</strong> ({result.score})</span>
+                                        ) : (
+                                            <span>{getLabel(group.candidate)} vs <strong>{getLabel(opponent)}</strong>: <strong>{getLabel(result.winner)}</strong> ({result.score})</span>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            {idx < groupedPairwise.length - 1 && (
+                                <div style={{ borderTop: '1px solid #3b82f6', marginTop: '6px' }}></div>
                             )}
                         </div>
                     ))}
@@ -818,10 +924,10 @@ function VotingAnalysis() {
                     Monte Carlo Simulation - Approval Voting
                 </h3>
                 <p style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '12px' }}>
-                    Simulates approval voting where each voter bloc always approves their top choice, 
+                    Simulates approval voting where each voter bloc always approves their top choice,
                     never approves their last choice, and randomly decides whether to approve middle-ranked candidates.
                 </p>
-                
+
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '15px' }}>
                     <div>
                         <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
@@ -837,7 +943,7 @@ function VotingAnalysis() {
                             style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
                         />
                     </div>
-                    
+
                     <div>
                         <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
                             Probability Distribution:
@@ -863,7 +969,7 @@ function VotingAnalysis() {
                             const percentage = (wins / numSimulations) * 100;
                             const maxWins = Math.max(...Object.values(monteCarloResults));
                             const isWinner = wins === maxWins;
-                            
+
                             return (
                                 <div key={cand} style={{ marginBottom: '10px' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
@@ -876,10 +982,10 @@ function VotingAnalysis() {
                                         </span>
                                     </div>
                                     <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
-                                        <div 
-                                            style={{ 
-                                                width: percentage + '%', 
-                                                height: '100%', 
+                                        <div
+                                            style={{
+                                                width: percentage + '%',
+                                                height: '100%',
                                                 backgroundColor: isWinner ? '#3b82f6' : '#475569',
                                                 transition: 'width 0.3s ease'
                                             }}
@@ -889,9 +995,9 @@ function VotingAnalysis() {
                             );
                         })}
                 </div>
-                
+
                 <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
-                    {distributionType === 'uniform' 
+                    {distributionType === 'uniform'
                         ? 'Uniform distribution: Each voter bloc is assigned a random approval probability (0-100%) for middle-ranked candidates in each simulation. Last-ranked candidates are never approved.'
                         : 'Normal distribution: Blocs tend to approve ~50% for middle-ranked candidates, with variation (std=0.2). Example: a bloc might approve 80% of their 2nd choice in one sim, 30% in another. Last-ranked candidates are never approved.'}
                 </p>
@@ -924,18 +1030,34 @@ function VotingAnalysis() {
                             style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
                         />
                     </div>
-                    <div>
-                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
-                            C3 Label:
-                        </label>
-                        <input
-                            type="text"
-                            value={label3}
-                            onChange={(e) => setLabel3(e.target.value)}
-                            placeholder="C3"
-                            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
-                        />
-                    </div>
+                    {numCandidates >= 3 && (
+                        <div>
+                            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                                C3 Label:
+                            </label>
+                            <input
+                                type="text"
+                                value={label3}
+                                onChange={(e) => setLabel3(e.target.value)}
+                                placeholder="C3"
+                                style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
+                            />
+                        </div>
+                    )}
+                    {numCandidates >= 4 && (
+                        <div>
+                            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                                C4 Label:
+                            </label>
+                            <input
+                                type="text"
+                                value={label4}
+                                onChange={(e) => setLabel4(e.target.value)}
+                                placeholder="C4"
+                                style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #475569', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0' }}
+                            />
+                        </div>
+                    )}
                 </div>
                 <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <button onClick={copyUrlToClipboard} style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#0891b2', border: 'none', color: '#e6fffa', fontWeight: '600', cursor: 'pointer' }}>
