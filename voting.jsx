@@ -503,6 +503,11 @@ function VotingAnalysis() {
     const [numSimulations, setNumSimulations] = useState(1000);
     const [distributionType, setDistributionType] = useState('uniform'); // 'uniform' or 'normal'
 
+    // Sincere threshold simulation state
+    const [sincereThreshold, setSincereThreshold] = useState(0.15);
+    const [numVoters, setNumVoters] = useState(100);
+    const [useBasicStrategy, setUseBasicStrategy] = useState(false);
+
     // Monte Carlo simulation for approval voting
     const monteCarloResults = useMemo(() => {
         const results = { C1: 0, C2: 0, C3: 0, C4: 0 };
@@ -547,6 +552,83 @@ function VotingAnalysis() {
     // Copy-to-clipboard feedback state
     const [copyStatus, setCopyStatus] = useState('');
 
+    // Sincere threshold simulation - generates voters and computes results
+    const sincereThresholdResults = useMemo(() => {
+        const candNames = Object.keys(candidates);
+        const candPositions = candNames.map(name => candidates[name]);
+
+        // Generate uniformly distributed voters
+        const voters = [];
+        for (let i = 0; i < numVoters; i++) {
+            voters.push(Math.random());
+        }
+
+        // Calculate approval votes for each voter
+        const approvalCounts = {};
+        candNames.forEach(name => approvalCounts[name] = 0);
+
+        const votesPerVoter = []; // Track how many candidates each voter approves
+
+        voters.forEach(voterPos => {
+            // Calculate distances to all candidates
+            const distances = candNames.map((name, idx) => ({
+                name,
+                distance: Math.abs(voterPos - candPositions[idx])
+            }));
+
+            // Sort by distance
+            distances.sort((a, b) => a.distance - b.distance);
+
+            let approvedCount = 0;
+
+            if (useBasicStrategy) {
+                // Always approve closest, never approve furthest
+                approvalCounts[distances[0].name]++;
+                approvedCount++;
+
+                // Check middle candidates against threshold
+                for (let i = 1; i < distances.length - 1; i++) {
+                    if (distances[i].distance <= sincereThreshold) {
+                        approvalCounts[distances[i].name]++;
+                        approvedCount++;
+                    }
+                }
+            } else {
+                // Approve all candidates within threshold (could be 0 or all)
+                distances.forEach(d => {
+                    if (d.distance <= sincereThreshold) {
+                        approvalCounts[d.name]++;
+                        approvedCount++;
+                    }
+                });
+            }
+
+            votesPerVoter.push(approvedCount);
+        });
+
+        // Find winner
+        const sorted = Object.entries(approvalCounts).sort((a, b) => b[1] - a[1]);
+        const winner = sorted[0][0];
+        const maxVotes = sorted[0][1];
+
+        // Count distribution of votes per voter
+        const votesDistribution = {};
+        for (let i = 0; i <= candNames.length; i++) {
+            votesDistribution[i] = 0;
+        }
+        votesPerVoter.forEach(count => {
+            votesDistribution[count]++;
+        });
+
+        return {
+            approvalCounts,
+            winner,
+            maxVotes,
+            votesDistribution,
+            totalVoters: numVoters
+        };
+    }, [candidates, sincereThreshold, numVoters, useBasicStrategy]);
+
     const copyUrlToClipboard = async () => {
         try {
             const url = window.location.href;
@@ -584,10 +666,10 @@ function VotingAnalysis() {
         setLabel4('D');
         setNumSimulations(1000);
         setDistributionType('uniform');
-        
+
         // Clear URL parameters
         window.history.replaceState({}, '', window.location.pathname);
-        
+
         setCopyStatus('Reset!');
         setTimeout(() => setCopyStatus(''), 2000);
     };
@@ -938,6 +1020,8 @@ function VotingAnalysis() {
                 </div>
             </div>
 
+            
+
             <div style={{ backgroundColor: '#1e3a5f', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #3b82f6' }}>
                 <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#93c5fd' }}>
                     Monte Carlo Simulation - Approval Voting
@@ -1019,6 +1103,140 @@ function VotingAnalysis() {
                     {distributionType === 'uniform'
                         ? 'Uniform distribution: Each voter bloc is assigned a random approval probability (0-100%) for middle-ranked candidates in each simulation. Last-ranked candidates are never approved.'
                         : 'Normal distribution: Blocs tend to approve ~50% for middle-ranked candidates, with variation (std=0.2). Example: a bloc might approve 80% of their 2nd choice in one sim, 30% in another. Last-ranked candidates are never approved.'}
+                </p>
+            </div>
+
+            <div style={{ backgroundColor: '#134e4a', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #14b8a6' }}>
+                <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#5eead4' }}>
+                    Sincere Threshold Simulation
+                </h3>
+                <p style={{ fontSize: '12px', color: '#cbd5e1', marginBottom: '12px' }}>
+                    Simulates {numVoters} voters uniformly distributed on [0,1]. Each voter approves candidates within their sincere threshold distance.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '15px' }}>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                            Number of Voters: {numVoters}
+                        </label>
+                        <input
+                            type="range"
+                            min="10"
+                            max="10000"
+                            step="10"
+                            value={numVoters}
+                            onChange={(e) => setNumVoters(parseInt(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                            Sincere Threshold: {sincereThreshold.toFixed(3)}
+                        </label>
+                        <input
+                            type="range"
+                            min="0.01"
+                            max="1.0"
+                            step="0.01"
+                            value={sincereThreshold}
+                            onChange={(e) => setSincereThreshold(parseFloat(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+                </div>
+
+                <div style={{ marginBottom: '15px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#cbd5e1' }}>
+                        <input
+                            type="checkbox"
+                            checked={useBasicStrategy}
+                            onChange={(e) => setUseBasicStrategy(e.target.checked)}
+                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                        />
+                        <span>Use basic strategy (always approve closest, never approve furthest)</span>
+                    </label>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px' }}>
+                    <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #0d9488' }}>
+                        <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#5eead4' }}>
+                            Approval Votes by Candidate
+                        </h4>
+                        {Object.entries(sincereThresholdResults.approvalCounts)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([cand, votes]) => {
+                                const percentage = (votes / sincereThresholdResults.totalVoters) * 100;
+                                const isWinner = cand === sincereThresholdResults.winner;
+
+                                return (
+                                    <div key={cand} style={{ marginBottom: '10px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                            <span style={{ fontSize: '14px', fontWeight: isWinner ? 'bold' : 'normal', color: '#e2e8f0' }}>
+                                                {getLabel(cand)}
+                                                {isWinner && <span style={{ marginLeft: '6px' }}>🏆</span>}
+                                            </span>
+                                            <span style={{ fontSize: '13px', fontWeight: isWinner ? 'bold' : 'normal', color: '#cbd5e1' }}>
+                                                {votes} ({percentage.toFixed(1)}%)
+                                            </span>
+                                        </div>
+                                        <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                            <div
+                                                style={{
+                                                    width: percentage + '%',
+                                                    height: '100%',
+                                                    backgroundColor: isWinner ? '#14b8a6' : '#475569',
+                                                    transition: 'width 0.3s ease'
+                                                }}
+                                            ></div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                    </div>
+
+                    <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #0d9488' }}>
+                        <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#5eead4' }}>
+                            Votes Cast per Voter
+                        </h4>
+                        {Object.entries(sincereThresholdResults.votesDistribution)
+                            .filter(([count, voters]) => voters > 0)
+                            .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+                            .map(([count, voters]) => {
+                                const percentage = (voters / sincereThresholdResults.totalVoters) * 100;
+                                const maxVoters = Math.max(...Object.values(sincereThresholdResults.votesDistribution));
+                                const relativeWidth = (voters / maxVoters) * 100;
+
+                                return (
+                                    <div key={count} style={{ marginBottom: '10px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                            <span style={{ fontSize: '14px', color: '#e2e8f0' }}>
+                                                {count} {count === '1' ? 'candidate' : 'candidates'}
+                                            </span>
+                                            <span style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                                                {voters} ({percentage.toFixed(1)}%)
+                                            </span>
+                                        </div>
+                                        <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                            <div
+                                                style={{
+                                                    width: relativeWidth + '%',
+                                                    height: '100%',
+                                                    backgroundColor: '#0d9488',
+                                                    transition: 'width 0.3s ease'
+                                                }}
+                                            ></div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                    </div>
+                </div>
+
+                <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
+                    {useBasicStrategy
+                        ? 'Basic strategy: Voters always approve their closest candidate and never approve their furthest candidate. Middle candidates are approved if within the threshold.'
+                        : 'Without strategy: Voters approve all candidates within their sincere threshold. This could result in approving 0 or all candidates.'}
                 </p>
             </div>
 
