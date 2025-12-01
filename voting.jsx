@@ -77,6 +77,12 @@ function VotingAnalysis() {
                 if (au !== null && !Number.isNaN(au) && au >= 0.1 && au <= 1.0) {
                     setAsyncUpdateRate(au);
                 }
+                
+                // Sincere voter proportion
+                const sv = parseFloat(params.get('sv'));
+                if (sv !== null && !Number.isNaN(sv) && sv >= 0.0 && sv <= 1.0) {
+                    setSincereVoterProportion(sv);
+                }
             }
         } catch (err) {
             console.warn('Error parsing URL params', err);
@@ -114,6 +120,7 @@ function VotingAnalysis() {
             params.set('st', sincereThreshold.toFixed(3));
             params.set('bs', useBasicStrategy ? '1' : '0');
             params.set('au', asyncUpdateRate.toFixed(1));
+            params.set('sv', sincereVoterProportion.toFixed(1));
 
             const newQuery = params.toString();
             const newUrl = window.location.pathname + (newQuery ? '?' + newQuery : '');
@@ -122,7 +129,7 @@ function VotingAnalysis() {
         } catch (err) {
             console.warn('Error updating URL params', err);
         }
-    }, [numCandidates, c1, c2, c3, c4, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, asyncUpdateRate]);
+    }, [numCandidates, c1, c2, c3, c4, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, asyncUpdateRate, sincereVoterProportion]);
 
     const handlePointerDown = (point) => (e) => {
         e.preventDefault();
@@ -534,6 +541,7 @@ function VotingAnalysis() {
     const [currentStep, setCurrentStep] = useState(0);
     const [voterSeed, setVoterSeed] = useState(0); // For redistributing voters
     const [asyncUpdateRate, setAsyncUpdateRate] = useState(0.4); // Fraction of voters that update per step
+    const [sincereVoterProportion, setSincereVoterProportion] = useState(0.0); // Proportion of voters who never change strategy
 
     // Monte Carlo simulation for approval voting
     const monteCarloResults = useMemo(() => {
@@ -888,6 +896,15 @@ function VotingAnalysis() {
 
             // Apply asynchronous updates: only update a fraction of voters
             const updatedThresholds = voters.map((voterPos, voterIdx) => {
+                // Check if this voter is a sincere voter (never changes strategy)
+                const sincereRng = seededRandom(voterSeed * 10000 + voterIdx);
+                const isSincereVoter = sincereRng() < sincereVoterProportion;
+                
+                if (isSincereVoter) {
+                    // Sincere voters always use initial sincere threshold
+                    return sincereThreshold;
+                }
+                
                 // Randomly decide if this voter updates (using seeded RNG for reproducibility)
                 const rng = seededRandom(voterSeed + stepNum * 1000 + voterIdx);
                 if (rng() < asyncUpdateRate) {
@@ -1459,22 +1476,42 @@ function VotingAnalysis() {
                     </label>
                 </div>
 
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
-                        Async Update Rate: {asyncUpdateRate.toFixed(1)} ({(asyncUpdateRate * 100).toFixed(0)}% of voters update per step)
-                    </label>
-                    <input
-                        type="range"
-                        min="0.1"
-                        max="1.0"
-                        step="0.1"
-                        value={asyncUpdateRate}
-                        onChange={(e) => setAsyncUpdateRate(parseFloat(e.target.value))}
-                        style={{ width: '100%' }}
-                    />
-                    <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', fontStyle: 'italic' }}>
-                        Lower values create gradual convergence and help prevent oscillation cycles.
-                    </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px', marginBottom: '15px' }}>
+                    <div>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                            Async Update Rate: {asyncUpdateRate.toFixed(1)} ({(asyncUpdateRate * 100).toFixed(0)}% of voters update per step)
+                        </label>
+                        <input
+                            type="range"
+                            min="0.1"
+                            max="1.0"
+                            step="0.1"
+                            value={asyncUpdateRate}
+                            onChange={(e) => setAsyncUpdateRate(parseFloat(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                        <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', fontStyle: 'italic' }}>
+                            Lower values create gradual convergence and help prevent oscillation cycles.
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                            Sincere Voter Proportion: {sincereVoterProportion.toFixed(1)} ({(sincereVoterProportion * 100).toFixed(0)}% never change strategy)
+                        </label>
+                        <input
+                            type="range"
+                            min="0.0"
+                            max="1.0"
+                            step="0.1"
+                            value={sincereVoterProportion}
+                            onChange={(e) => setSincereVoterProportion(parseFloat(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                        <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', fontStyle: 'italic' }}>
+                            These voters always vote with their initial sincere threshold.
+                        </p>
+                    </div>
                 </div>
 
                 <div style={{ marginBottom: '15px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1772,6 +1809,7 @@ function VotingAnalysis() {
                                     .map(([cand, votes]) => {
                                         const percentage = (votes / numVoters) * 100;
                                         const isWinner = cand === turnBasedResults[currentStep].winner;
+                                        const isCondorcet = cand === condorcetInfo.winner && condorcetInfo.winner !== 'None';
 
                                         return (
                                             <div key={cand} style={{ marginBottom: '10px' }}>
@@ -1779,6 +1817,7 @@ function VotingAnalysis() {
                                                     <span style={{ fontSize: '14px', fontWeight: isWinner ? 'bold' : 'normal', color: '#e2e8f0' }}>
                                                         {getLabel(cand)}
                                                         {isWinner && <span style={{ marginLeft: '6px' }}>🏆</span>}
+                                                        {isCondorcet && <span style={{ marginLeft: '4px', fontSize: '11px', color: '#60a5fa' }}>(Condorcet)</span>}
                                                     </span>
                                                     <span style={{ fontSize: '13px', fontWeight: isWinner ? 'bold' : 'normal', color: '#cbd5e1' }}>
                                                         {votes} ({percentage.toFixed(1)}%)
@@ -1898,7 +1937,7 @@ function VotingAnalysis() {
                         </div>
 
                         <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
-                            Each step, voters adjust strategically: viable candidates are within 3% of first place. If multiple are viable, voters approve their closest viable. If only one is viable (clear frontrunner), voters who have the frontrunner within their sincere threshold approve up to and including the frontrunner, while those who don't approve only candidates closer than the frontrunner. With async update rate of {asyncUpdateRate.toFixed(1)}, only {(asyncUpdateRate * 100).toFixed(0)}% of voters update their ballots each step, allowing gradual convergence.
+                            Each step, voters adjust strategically: viable candidates are within 3% of first place. If multiple are viable, voters approve their closest viable. If only one is viable (clear frontrunner), voters who have the frontrunner within their sincere threshold approve up to and including the frontrunner, while those who don't approve only candidates closer than the frontrunner. With async update rate of {asyncUpdateRate.toFixed(1)}, only {(asyncUpdateRate * 100).toFixed(0)}% of voters update their ballots each step. Additionally, {(sincereVoterProportion * 100).toFixed(0)}% of voters are sincere and never change their initial strategy.
                         </p>
                     </div>
                 )}
