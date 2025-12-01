@@ -71,6 +71,12 @@ function VotingAnalysis() {
                 if (bs !== null) {
                     setUseBasicStrategy(Boolean(bs));
                 }
+                
+                // Async update rate
+                const au = parseFloat(params.get('au'));
+                if (au !== null && !Number.isNaN(au) && au >= 0.1 && au <= 1.0) {
+                    setAsyncUpdateRate(au);
+                }
             }
         } catch (err) {
             console.warn('Error parsing URL params', err);
@@ -107,6 +113,7 @@ function VotingAnalysis() {
 
             params.set('st', sincereThreshold.toFixed(3));
             params.set('bs', useBasicStrategy ? '1' : '0');
+            params.set('au', asyncUpdateRate.toFixed(1));
 
             const newQuery = params.toString();
             const newUrl = window.location.pathname + (newQuery ? '?' + newQuery : '');
@@ -115,7 +122,7 @@ function VotingAnalysis() {
         } catch (err) {
             console.warn('Error updating URL params', err);
         }
-    }, [numCandidates, c1, c2, c3, c4, label1, label2, label3, label4, sincereThreshold, useBasicStrategy]);
+    }, [numCandidates, c1, c2, c3, c4, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, asyncUpdateRate]);
 
     const handlePointerDown = (point) => (e) => {
         e.preventDefault();
@@ -526,6 +533,7 @@ function VotingAnalysis() {
     const [turnBasedResults, setTurnBasedResults] = useState(null);
     const [currentStep, setCurrentStep] = useState(0);
     const [voterSeed, setVoterSeed] = useState(0); // For redistributing voters
+    const [asyncUpdateRate, setAsyncUpdateRate] = useState(0.4); // Fraction of voters that update per step
 
     // Monte Carlo simulation for approval voting
     const monteCarloResults = useMemo(() => {
@@ -721,9 +729,18 @@ function VotingAnalysis() {
         const candPositions = candNames.map(name => candidates[name]);
         const voters = sincereThresholdResults.voters;
 
-        const maxSteps = 10;
+        const maxSteps = 50;
         const epsilon = 0.001;
         const steps = [];
+        
+        // Simple seeded random number generator (needed for async updates)
+        const seededRandom = (seed) => {
+            let state = seed;
+            return () => {
+                state = (state * 1664525 + 1013904223) % 4294967296;
+                return state / 4294967296;
+            };
+        };
 
         // Step 0: Initial sincere voting with current threshold
         let currentThresholds = voters.map(() => sincereThreshold);
@@ -788,7 +805,7 @@ function VotingAnalysis() {
             const winner = sorted[0][0];
             const firstPlaceVotes = sorted[0][1];
             const marginOfError = 0.03; // 3% margin
-            
+
             // Include all candidates within MOE of first place
             const threshold = firstPlaceVotes * (1 - marginOfError);
             const viableCandidates = sorted
@@ -829,7 +846,7 @@ function VotingAnalysis() {
 
             // Each voter adjusts threshold strategically
             // Viable = within 3% margin of error of first place
-            const newThresholds = voters.map((voterPos) => {
+            const newThresholds = voters.map((voterPos, voterIdx) => {
                 const allDistances = candNames.map(candName => ({
                     name: candName,
                     distance: Math.abs(voterPos - candidates[candName])
@@ -837,12 +854,12 @@ function VotingAnalysis() {
                 allDistances.sort((a, b) => a.distance - b.distance);
                 const closest = allDistances[0].name;
                 const closestDist = allDistances[0].distance;
-                
+
                 if (prevStep.viableCandidates.length === 1) {
                     // Only one viable candidate (clear frontrunner)
                     const frontrunner = prevStep.viableCandidates[0];
                     const frontrunnerDist = Math.abs(voterPos - candidates[frontrunner]);
-                    
+
                     if (closest === frontrunner) {
                         // Case 1: Frontrunner is first choice - bullet vote (approve only frontrunner)
                         return frontrunnerDist + epsilon;
@@ -864,16 +881,28 @@ function VotingAnalysis() {
                     }));
                     viableDistances.sort((a, b) => a.distance - b.distance);
                     const closestViableDist = viableDistances[0].distance;
-                    
+
                     return closestViableDist + epsilon;
                 }
             });
 
-            const currentStep = computeStep(newThresholds);
+            // Apply asynchronous updates: only update a fraction of voters
+            const updatedThresholds = voters.map((voterPos, voterIdx) => {
+                // Randomly decide if this voter updates (using seeded RNG for reproducibility)
+                const rng = seededRandom(voterSeed + stepNum * 1000 + voterIdx);
+                if (rng() < asyncUpdateRate) {
+                    return newThresholds[voterIdx];
+                } else {
+                    // Keep previous threshold
+                    return prevStep.thresholds[voterIdx];
+                }
+            });
+
+            const currentStep = computeStep(updatedThresholds);
             steps.push({
                 stepNumber: stepNum,
                 ...currentStep,
-                thresholds: [...newThresholds]
+                thresholds: [...updatedThresholds]
             });
 
             // Check for convergence: no voter changed their ballot
@@ -884,7 +913,7 @@ function VotingAnalysis() {
                 Object.keys(prevStep.ballotCounts).every(
                     ballot => prevStep.ballotCounts[ballot] === currentStep.ballotCounts[ballot]
                 );
-            
+
             if (ballotsMatch) {
                 break;
             }
@@ -1430,6 +1459,24 @@ function VotingAnalysis() {
                     </label>
                 </div>
 
+                <div style={{ marginBottom: '15px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                        Async Update Rate: {asyncUpdateRate.toFixed(1)} ({(asyncUpdateRate * 100).toFixed(0)}% of voters update per step)
+                    </label>
+                    <input
+                        type="range"
+                        min="0.1"
+                        max="1.0"
+                        step="0.1"
+                        value={asyncUpdateRate}
+                        onChange={(e) => setAsyncUpdateRate(parseFloat(e.target.value))}
+                        style={{ width: '100%' }}
+                    />
+                    <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', fontStyle: 'italic' }}>
+                        Lower values create gradual convergence and help prevent oscillation cycles.
+                    </p>
+                </div>
+
                 <div style={{ marginBottom: '15px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <button
                         onClick={redistributeVoters}
@@ -1816,7 +1863,7 @@ function VotingAnalysis() {
                             <p style={{ fontSize: '10px', color: '#a78bfa', marginTop: '8px', fontStyle: 'italic' }}>
                                 Ballots are ordered by each voter's preference (closest candidate first).
                             </p>
-                            
+
                             <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #4c1d95' }}>
                                 <h6 style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#c4b5fd' }}>
                                     Plurality Vote (if only first choice counted):
@@ -1828,10 +1875,10 @@ function VotingAnalysis() {
                                         const firstChoice = ballot.split(',')[0]; // First candidate is voter's favorite
                                         pluralityVotes[firstChoice] = (pluralityVotes[firstChoice] || 0) + count;
                                     });
-                                    
+
                                     const sorted = Object.entries(pluralityVotes).sort((a, b) => b[1] - a[1]);
                                     const pluralityWinner = sorted[0][0];
-                                    
+
                                     return sorted.map(([cand, votes]) => {
                                         const percentage = (votes / numVoters) * 100;
                                         const isWinner = cand === pluralityWinner;
@@ -1851,7 +1898,7 @@ function VotingAnalysis() {
                         </div>
 
                         <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
-                            Each step, voters adjust strategically: viable candidates are within 3% of first place. If multiple are viable, voters approve their closest viable. If only one is viable (clear frontrunner), voters who have the frontrunner within their sincere threshold approve up to and including the frontrunner, while those who don't approve only candidates closer than the frontrunner.
+                            Each step, voters adjust strategically: viable candidates are within 3% of first place. If multiple are viable, voters approve their closest viable. If only one is viable (clear frontrunner), voters who have the frontrunner within their sincere threshold approve up to and including the frontrunner, while those who don't approve only candidates closer than the frontrunner. With async update rate of {asyncUpdateRate.toFixed(1)}, only {(asyncUpdateRate * 100).toFixed(0)}% of voters update their ballots each step, allowing gradual convergence.
                         </p>
                     </div>
                 )}
