@@ -8,6 +8,7 @@ function VotingAnalysis() {
     const [c4, setC4] = useState(0.95);
     const [dragging, setDragging] = useState(null);
     const svgRef = useRef(null);
+    const hasInitializedRef = useRef(false);
 
     // Custom candidate labels
     const [label1, setLabel1] = useState('A');
@@ -71,13 +72,13 @@ function VotingAnalysis() {
                 if (bs !== null) {
                     setUseBasicStrategy(Boolean(bs));
                 }
-                
+
                 // Async update rate
                 const au = parseFloat(params.get('au'));
                 if (au !== null && !Number.isNaN(au) && au >= 0.1 && au <= 1.0) {
                     setAsyncUpdateRate(au);
                 }
-                
+
                 // Sincere voter proportion
                 const sv = parseFloat(params.get('sv'));
                 if (sv !== null && !Number.isNaN(sv) && sv >= 0.0 && sv <= 1.0) {
@@ -89,9 +90,24 @@ function VotingAnalysis() {
         }
     };
 
+    // Helper to update a single URL param immediately (used by sliders)
+    const updateUrlParam = (key, value) => {
+        try {
+            const params = new URLSearchParams(window.location.search);
+            if (value === null || value === undefined) params.delete(key);
+            else params.set(key, value);
+            const newQuery = params.toString();
+            const newUrl = window.location.pathname + (newQuery ? '?' + newQuery : '');
+            window.history.replaceState({}, '', newUrl);
+        } catch (err) {
+            console.warn('Error updating single URL param', err);
+        }
+    };
+
     // Read initial params once and respond to back/forward navigation
     useEffect(() => {
         parseAndApplyUrl(true);
+        hasInitializedRef.current = true;
 
         const onPop = () => parseAndApplyUrl(true);
         window.addEventListener('popstate', onPop);
@@ -102,6 +118,9 @@ function VotingAnalysis() {
 
     // Update the URL whenever positions or labels change
     useEffect(() => {
+        // Don't update URL on initial mount (let parseAndApplyUrl run first)
+        if (!hasInitializedRef.current) return;
+
         try {
             const params = new URLSearchParams(window.location.search);
             params.set('n', numCandidates.toString());
@@ -740,7 +759,7 @@ function VotingAnalysis() {
         const maxSteps = 50;
         const epsilon = 0.001;
         const steps = [];
-        
+
         // Simple seeded random number generator (needed for async updates)
         const seededRandom = (seed) => {
             let state = seed;
@@ -862,6 +881,8 @@ function VotingAnalysis() {
                 allDistances.sort((a, b) => a.distance - b.distance);
                 const closest = allDistances[0].name;
                 const closestDist = allDistances[0].distance;
+                const furthest = allDistances[allDistances.length - 1].name;
+                const furthestDist = allDistances[allDistances.length - 1].distance;
 
                 if (prevStep.viableCandidates.length === 1) {
                     // Only one viable candidate (clear frontrunner)
@@ -873,16 +894,16 @@ function VotingAnalysis() {
                         return frontrunnerDist + epsilon;
                     } else if (frontrunnerDist <= sincereThreshold) {
                         // Case 2: Frontrunner not first but within sincere threshold
-                        // Approve frontrunner and everyone preferred to them
-                        return frontrunnerDist + epsilon;
+                        // Approve frontrunner and everyone preferred to them (but not least favorite)
+                        return Math.min(frontrunnerDist + epsilon, furthestDist - epsilon);
                     } else {
                         // Case 3: Frontrunner not in sincere threshold
-                        // Approve everyone strictly preferred to frontrunner (at least closest)
-                        return frontrunnerDist - epsilon;
+                        // Approve everyone strictly preferred to frontrunner (but not least favorite)
+                        return Math.min(frontrunnerDist - epsilon, furthestDist - epsilon);
                     }
                 } else {
                     // Multiple viable candidates
-                    // Strategy: approve closest viable candidate
+                    // Strategy: approve closest viable candidate (but never least favorite)
                     const viableDistances = prevStep.viableCandidates.map(candName => ({
                         name: candName,
                         distance: Math.abs(voterPos - candidates[candName])
@@ -890,7 +911,7 @@ function VotingAnalysis() {
                     viableDistances.sort((a, b) => a.distance - b.distance);
                     const closestViableDist = viableDistances[0].distance;
 
-                    return closestViableDist + epsilon;
+                    return Math.min(closestViableDist + epsilon, furthestDist - epsilon);
                 }
             });
 
@@ -899,13 +920,14 @@ function VotingAnalysis() {
                 // Check if this voter is a sincere voter (never changes strategy)
                 const sincereRng = seededRandom(voterSeed * 10000 + voterIdx);
                 const isSincereVoter = sincereRng() < sincereVoterProportion;
-                
+
                 if (isSincereVoter) {
                     // Sincere voters always use initial sincere threshold
                     return sincereThreshold;
                 }
-                
-                // Randomly decide if this voter updates (using seeded RNG for reproducibility)
+
+                // For strategic voters: randomly decide if this voter updates
+                // (async rate applies only to strategic voters)
                 const rng = seededRandom(voterSeed + stepNum * 1000 + voterIdx);
                 if (rng() < asyncUpdateRate) {
                     return newThresholds[voterIdx];
@@ -1385,6 +1407,7 @@ function VotingAnalysis() {
                         Winner Frequency (out of {numSimulations} simulations)
                     </h4>
                     {Object.entries(monteCarloResults)
+                        .filter(([cand]) => candidates.hasOwnProperty(cand))
                         .sort((a, b) => b[1] - a[1])
                         .map(([cand, wins]) => {
                             const percentage = (wins / numSimulations) * 100;
@@ -1479,7 +1502,7 @@ function VotingAnalysis() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px', marginBottom: '15px' }}>
                     <div>
                         <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
-                            Async Update Rate: {asyncUpdateRate.toFixed(1)} ({(asyncUpdateRate * 100).toFixed(0)}% of voters update per step)
+                            Async Update Rate: {asyncUpdateRate.toFixed(1)} ({(asyncUpdateRate * (1 - sincereVoterProportion) * 100).toFixed(1)}% of all voters update per step)
                         </label>
                         <input
                             type="range"
@@ -1487,14 +1510,18 @@ function VotingAnalysis() {
                             max="1.0"
                             step="0.1"
                             value={asyncUpdateRate}
-                            onChange={(e) => setAsyncUpdateRate(parseFloat(e.target.value))}
+                            onChange={(e) => {
+                                const v = parseFloat(e.target.value);
+                                setAsyncUpdateRate(v);
+                                updateUrlParam('au', v.toFixed(1));
+                            }}
                             style={{ width: '100%' }}
                         />
                         <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', fontStyle: 'italic' }}>
-                            Lower values create gradual convergence and help prevent oscillation cycles.
+                            Applies only to strategic voters. Lower values create gradual convergence.
                         </p>
                     </div>
-                    
+
                     <div>
                         <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
                             Sincere Voter Proportion: {sincereVoterProportion.toFixed(1)} ({(sincereVoterProportion * 100).toFixed(0)}% never change strategy)
@@ -1505,7 +1532,11 @@ function VotingAnalysis() {
                             max="1.0"
                             step="0.1"
                             value={sincereVoterProportion}
-                            onChange={(e) => setSincereVoterProportion(parseFloat(e.target.value))}
+                            onChange={(e) => {
+                                const v = parseFloat(e.target.value);
+                                setSincereVoterProportion(v);
+                                updateUrlParam('sv', v.toFixed(1));
+                            }}
                             style={{ width: '100%' }}
                         />
                         <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', fontStyle: 'italic' }}>
@@ -1937,7 +1968,7 @@ function VotingAnalysis() {
                         </div>
 
                         <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
-                            Each step, voters adjust strategically: viable candidates are within 3% of first place. If multiple are viable, voters approve their closest viable. If only one is viable (clear frontrunner), voters who have the frontrunner within their sincere threshold approve up to and including the frontrunner, while those who don't approve only candidates closer than the frontrunner. With async update rate of {asyncUpdateRate.toFixed(1)}, only {(asyncUpdateRate * 100).toFixed(0)}% of voters update their ballots each step. Additionally, {(sincereVoterProportion * 100).toFixed(0)}% of voters are sincere and never change their initial strategy.
+                            Each step, voters adjust strategically: viable candidates are within 3% of first place. Strategic voters never approve their least favorite candidate. If multiple are viable, voters approve their closest viable. If only one is viable (clear frontrunner), voters who have the frontrunner within their sincere threshold approve up to and including the frontrunner, while those who don't approve only candidates closer than the frontrunner. {(sincereVoterProportion * 100).toFixed(0)}% of voters are sincere and always vote with their initial threshold. Of the remaining {((1 - sincereVoterProportion) * 100).toFixed(0)}% strategic voters, {(asyncUpdateRate * 100).toFixed(0)}% update each step (= {(asyncUpdateRate * (1 - sincereVoterProportion) * 100).toFixed(1)}% of all voters).
                         </p>
                     </div>
                 )}
