@@ -2,12 +2,21 @@ const { useState, useMemo, useRef, useEffect } = React;
 
 function VotingAnalysis() {
     const [numCandidates, setNumCandidates] = useState(3);
+    // 1D positions
     const [c1, setC1] = useState(0.2);
     const [c2, setC2] = useState(0.5);
     const [c3, setC3] = useState(0.8);
     const [c4, setC4] = useState(0.95);
+    // 2D positions (x, y)
+    const [c1_2d, setC1_2d] = useState({ x: 0.2, y: 0.3 });
+    const [c2_2d, setC2_2d] = useState({ x: 0.5, y: 0.7 });
+    const [c3_2d, setC3_2d] = useState({ x: 0.8, y: 0.4 });
+    const [c4_2d, setC4_2d] = useState({ x: 0.3, y: 0.8 });
+    // Dimension mode: '1d' or '2d'
+    const [dimensionMode, setDimensionMode] = useState('1d');
     const [dragging, setDragging] = useState(null);
     const svgRef = useRef(null);
+    const svg2dRef = useRef(null);
     const hasInitializedRef = useRef(false);
 
     // Custom candidate labels
@@ -26,6 +35,23 @@ function VotingAnalysis() {
             const p2 = params.has('c2') ? parseFloat(params.get('c2')) : null;
             const p3 = params.has('c3') ? parseFloat(params.get('c3')) : null;
             const p4 = params.has('c4') ? parseFloat(params.get('c4')) : null;
+
+            // 2D positions
+            const dim = params.get('dim');
+            const parse2d = (key) => {
+                const val = params.get(key);
+                if (!val) return null;
+                const parts = val.split(',');
+                if (parts.length !== 2) return null;
+                const x = parseFloat(parts[0]);
+                const y = parseFloat(parts[1]);
+                if (Number.isNaN(x) || Number.isNaN(y)) return null;
+                return { x: Math.max(0.01, Math.min(0.99, x)), y: Math.max(0.01, Math.min(0.99, y)) };
+            };
+            const p1_2d = parse2d('c1_2d');
+            const p2_2d = parse2d('c2_2d');
+            const p3_2d = parse2d('c3_2d');
+            const p4_2d = parse2d('c4_2d');
 
             const l1 = params.get('l1');
             const l2 = params.get('l2');
@@ -62,6 +88,14 @@ function VotingAnalysis() {
                 setC2(nc2);
                 setC3(nc3);
                 setC4(nc4);
+                // 2D positions
+                if (dim === '2d') setDimensionMode('2d');
+                else if (dim === '1d') setDimensionMode('1d');
+                if (p1_2d) setC1_2d(p1_2d);
+                if (p2_2d) setC2_2d(p2_2d);
+                if (p3_2d) setC3_2d(p3_2d);
+                if (p4_2d) setC4_2d(p4_2d);
+
                 if (l1 !== null) setLabel1(l1);
                 if (l2 !== null) setLabel2(l2);
                 if (l3 !== null) setLabel3(l3);
@@ -124,12 +158,21 @@ function VotingAnalysis() {
         try {
             const params = new URLSearchParams(window.location.search);
             params.set('n', numCandidates.toString());
+            params.set('dim', dimensionMode);
+            // 1D positions
             params.set('c1', c1.toFixed(3));
             params.set('c2', c2.toFixed(3));
             if (numCandidates >= 3) params.set('c3', c3.toFixed(3));
             else params.delete('c3');
             if (numCandidates >= 4) params.set('c4', c4.toFixed(3));
             else params.delete('c4');
+            // 2D positions
+            params.set('c1_2d', `${c1_2d.x.toFixed(3)},${c1_2d.y.toFixed(3)}`);
+            params.set('c2_2d', `${c2_2d.x.toFixed(3)},${c2_2d.y.toFixed(3)}`);
+            if (numCandidates >= 3) params.set('c3_2d', `${c3_2d.x.toFixed(3)},${c3_2d.y.toFixed(3)}`);
+            else params.delete('c3_2d');
+            if (numCandidates >= 4) params.set('c4_2d', `${c4_2d.x.toFixed(3)},${c4_2d.y.toFixed(3)}`);
+            else params.delete('c4_2d');
 
             if (label1) params.set('l1', label1); else params.delete('l1');
             if (label2) params.set('l2', label2); else params.delete('l2');
@@ -148,7 +191,7 @@ function VotingAnalysis() {
         } catch (err) {
             console.warn('Error updating URL params', err);
         }
-    }, [numCandidates, c1, c2, c3, c4, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, asyncUpdateRate, sincereVoterProportion]);
+    }, [numCandidates, dimensionMode, c1, c2, c3, c4, c1_2d, c2_2d, c3_2d, c4_2d, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, asyncUpdateRate, sincereVoterProportion]);
 
     const handlePointerDown = (point) => (e) => {
         e.preventDefault();
@@ -156,28 +199,57 @@ function VotingAnalysis() {
     };
 
     const handlePointerMove = (e) => {
-        if (!dragging || !svgRef.current) return;
+        if (!dragging) return;
 
-        const svg = svgRef.current;
-        const rect = svg.getBoundingClientRect();
+        // Handle 1D dragging
+        if (dimensionMode === '1d' && svgRef.current) {
+            const svg = svgRef.current;
+            const rect = svg.getBoundingClientRect();
 
-        // Handle both mouse and touch events
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const x = (clientX - rect.left) / rect.width;
-        const clampedX = Math.max(0.01, Math.min(0.99, x));
+            // Handle both mouse and touch events
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const x = (clientX - rect.left) / rect.width;
+            const clampedX = Math.max(0.01, Math.min(0.99, x));
 
-        // Round to nearest 0.01 for cleaner values
-        const roundedX = Math.round(clampedX * 100) / 100;
+            // Round to nearest 0.01 for cleaner values
+            const roundedX = Math.round(clampedX * 100) / 100;
 
-        // Allow candidates to be dragged freely across each other
-        if (dragging === 'c1') {
-            setC1(roundedX);
-        } else if (dragging === 'c2') {
-            setC2(roundedX);
-        } else if (dragging === 'c3' && numCandidates >= 3) {
-            setC3(roundedX);
-        } else if (dragging === 'c4' && numCandidates >= 4) {
-            setC4(roundedX);
+            // Allow candidates to be dragged freely across each other
+            if (dragging === 'c1') {
+                setC1(roundedX);
+            } else if (dragging === 'c2') {
+                setC2(roundedX);
+            } else if (dragging === 'c3' && numCandidates >= 3) {
+                setC3(roundedX);
+            } else if (dragging === 'c4' && numCandidates >= 4) {
+                setC4(roundedX);
+            }
+        }
+
+        // Handle 2D dragging
+        if (dimensionMode === '2d' && svg2dRef.current) {
+            const svg = svg2dRef.current;
+            const rect = svg.getBoundingClientRect();
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const x = (clientX - rect.left) / rect.width;
+            const y = (clientY - rect.top) / rect.height;
+            const clampedX = Math.max(0.01, Math.min(0.99, x));
+            const clampedY = Math.max(0.01, Math.min(0.99, y));
+
+            const roundedX = Math.round(clampedX * 100) / 100;
+            const roundedY = Math.round(clampedY * 100) / 100;
+
+            if (dragging === 'c1') {
+                setC1_2d({ x: roundedX, y: roundedY });
+            } else if (dragging === 'c2') {
+                setC2_2d({ x: roundedX, y: roundedY });
+            } else if (dragging === 'c3' && numCandidates >= 3) {
+                setC3_2d({ x: roundedX, y: roundedY });
+            } else if (dragging === 'c4' && numCandidates >= 4) {
+                setC4_2d({ x: roundedX, y: roundedY });
+            }
         }
     };
 
@@ -198,116 +270,210 @@ function VotingAnalysis() {
                 document.removeEventListener('touchend', handlePointerUp);
             };
         }
-    }, [dragging, c1, c2, c3, c4, numCandidates]);
+    }, [dragging, dimensionMode, c1, c2, c3, c4, c1_2d, c2_2d, c3_2d, c4_2d, numCandidates]);
 
-    // Candidate positions (now the primary variables)
+    // Candidate positions - unified structure for both 1D and 2D
+    // In 1D mode: { C1: 0.2, C2: 0.5, ... } (number positions)
+    // In 2D mode: { C1: {x: 0.2, y: 0.3}, C2: {x: 0.5, y: 0.7}, ... } (point positions)
     const candidates = useMemo(() => {
-        const positions = [
-            { id: 'C1', pos: c1 },
-            { id: 'C2', pos: c2 }
-        ];
-        if (numCandidates >= 3) positions.push({ id: 'C3', pos: c3 });
-        if (numCandidates >= 4) positions.push({ id: 'C4', pos: c4 });
+        if (dimensionMode === '1d') {
+            const positions = [
+                { id: 'C1', pos: c1 },
+                { id: 'C2', pos: c2 }
+            ];
+            if (numCandidates >= 3) positions.push({ id: 'C3', pos: c3 });
+            if (numCandidates >= 4) positions.push({ id: 'C4', pos: c4 });
 
-        // Sort by position to maintain left-to-right ordering
-        positions.sort((a, b) => a.pos - b.pos);
+            // Sort by position to maintain left-to-right ordering
+            positions.sort((a, b) => a.pos - b.pos);
 
-        const result = {};
-        positions.forEach(p => result[p.id] = p.pos);
-        return result;
-    }, [c1, c2, c3, c4, numCandidates]);
+            const result = {};
+            positions.forEach(p => result[p.id] = p.pos);
+            return result;
+        } else {
+            // 2D mode - don't sort, just return positions
+            const result = { C1: c1_2d, C2: c2_2d };
+            if (numCandidates >= 3) result.C3 = c3_2d;
+            if (numCandidates >= 4) result.C4 = c4_2d;
+            return result;
+        }
+    }, [dimensionMode, c1, c2, c3, c4, c1_2d, c2_2d, c3_2d, c4_2d, numCandidates]);
 
-    // Calculate indifference points (where voters are equidistant)
+    // Helper function to calculate distance between two points (works for both 1D and 2D)
+    const distance = (pos1, pos2) => {
+        if (dimensionMode === '1d') {
+            return Math.abs(pos1 - pos2);
+        } else {
+            return Math.sqrt((pos1.x - pos2.x) ** 2 + (pos1.y - pos2.y) ** 2);
+        }
+    };
+
+    // Calculate indifference points/lines (where voters are equidistant)
+    // In 1D: points (midpoints between candidates)
+    // In 2D: lines (perpendicular bisectors between candidates)
     const indifferencePoints = useMemo(() => {
-        const points = {
-            x12: (c1 + c2) / 2
-        };
-        if (numCandidates >= 3) {
-            points.x23 = (c2 + c3) / 2;
-            points.x13 = (c1 + c3) / 2;
+        if (dimensionMode === '1d') {
+            const points = {
+                x12: (c1 + c2) / 2
+            };
+            if (numCandidates >= 3) {
+                points.x23 = (c2 + c3) / 2;
+                points.x13 = (c1 + c3) / 2;
+            }
+            if (numCandidates >= 4) {
+                points.x34 = (c3 + c4) / 2;
+                points.x14 = (c1 + c4) / 2;
+                points.x24 = (c2 + c4) / 2;
+            }
+            return points;
+        } else {
+            // 2D mode: return perpendicular bisector lines
+            // Each line is defined as { midpoint: {x, y}, slope: number or 'vertical' }
+            const candList = [{ id: 'C1', pos: c1_2d }, { id: 'C2', pos: c2_2d }];
+            if (numCandidates >= 3) candList.push({ id: 'C3', pos: c3_2d });
+            if (numCandidates >= 4) candList.push({ id: 'C4', pos: c4_2d });
+
+            const lines = {};
+            for (let i = 0; i < candList.length; i++) {
+                for (let j = i + 1; j < candList.length; j++) {
+                    const p1 = candList[i].pos;
+                    const p2 = candList[j].pos;
+                    const midpoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+                    // Perpendicular bisector has slope perpendicular to line connecting candidates
+                    const dx = p2.x - p1.x;
+                    const dy = p2.y - p1.y;
+                    // Original slope is dy/dx, perpendicular slope is -dx/dy
+                    const slope = Math.abs(dy) < 0.0001 ? 'vertical' : -dx / dy;
+                    const key = `x${candList[i].id.slice(1)}${candList[j].id.slice(1)}`;
+                    lines[key] = { midpoint, slope, c1: candList[i].id, c2: candList[j].id };
+                }
+            }
+            return lines;
         }
-        if (numCandidates >= 4) {
-            points.x34 = (c3 + c4) / 2;
-            points.x14 = (c1 + c4) / 2;
-            points.x24 = (c2 + c4) / 2;
-        }
-        return points;
-    }, [c1, c2, c3, c4, numCandidates]);
+    }, [dimensionMode, c1, c2, c3, c4, c1_2d, c2_2d, c3_2d, c4_2d, numCandidates]);
 
     // Calculate voter preferences based on distance
     const voterRankings = useMemo(() => {
         const candNames = Object.keys(candidates);
-        const candPositions = Object.values(candidates);
 
-        // Find critical points where rankings change
-        const points = [0, 1, ...candPositions];
+        if (dimensionMode === '1d') {
+            const candPositions = Object.values(candidates);
 
-        // Add midpoints between all pairs
-        for (let i = 0; i < candPositions.length; i++) {
-            for (let j = i + 1; j < candPositions.length; j++) {
-                points.push((candPositions[i] + candPositions[j]) / 2);
+            // Find critical points where rankings change
+            const points = [0, 1, ...candPositions];
+
+            // Add midpoints between all pairs
+            for (let i = 0; i < candPositions.length; i++) {
+                for (let j = i + 1; j < candPositions.length; j++) {
+                    points.push((candPositions[i] + candPositions[j]) / 2);
+                }
             }
-        }
 
-        points.sort((a, b) => a - b);
+            points.sort((a, b) => a - b);
 
-        // For each interval, determine ranking
-        const rankings = [];
-        for (let i = 0; i < points.length - 1; i++) {
-            const voterPos = (points[i] + points[i + 1]) / 2;
+            // For each interval, determine ranking
+            const rankings = [];
+            for (let i = 0; i < points.length - 1; i++) {
+                const voterPos = (points[i] + points[i + 1]) / 2;
 
-            const dists = candNames.map(name => ({
-                name,
-                dist: Math.abs(voterPos - candidates[name])
-            }));
+                const dists = candNames.map(name => ({
+                    name,
+                    dist: Math.abs(voterPos - candidates[name])
+                }));
 
-            dists.sort((a, b) => a.dist - b.dist);
+                dists.sort((a, b) => a.dist - b.dist);
 
-            const ranking = dists.map(d => d.name).join('>');
-            const proportion = points[i + 1] - points[i];
+                const ranking = dists.map(d => d.name).join('>');
+                const proportion = points[i + 1] - points[i];
 
-            const found = rankings.find(r => r.ranking === ranking);
-            if (found) {
-                found.proportion += proportion;
-            } else {
-                rankings.push({ ranking, proportion });
+                const found = rankings.find(r => r.ranking === ranking);
+                if (found) {
+                    found.proportion += proportion;
+                } else {
+                    rankings.push({ ranking, proportion });
+                }
             }
-        }
 
-        return rankings.filter(r => r.proportion > 0.0001);
-    }, [candidates]);
+            return rankings.filter(r => r.proportion > 0.0001);
+        } else {
+            // 2D mode: sample the grid uniformly to compute Voronoi proportions
+            const gridSize = 100; // 100x100 grid for decent precision
+            const rankings = [];
+            const rankingCounts = {};
+
+            for (let ix = 0; ix < gridSize; ix++) {
+                for (let iy = 0; iy < gridSize; iy++) {
+                    const voterPos = { 
+                        x: (ix + 0.5) / gridSize, 
+                        y: (iy + 0.5) / gridSize 
+                    };
+
+                    const dists = candNames.map(name => ({
+                        name,
+                        dist: Math.sqrt(
+                            (voterPos.x - candidates[name].x) ** 2 + 
+                            (voterPos.y - candidates[name].y) ** 2
+                        )
+                    }));
+
+                    dists.sort((a, b) => a.dist - b.dist);
+                    const ranking = dists.map(d => d.name).join('>');
+
+                    if (rankingCounts[ranking]) {
+                        rankingCounts[ranking]++;
+                    } else {
+                        rankingCounts[ranking] = 1;
+                    }
+                }
+            }
+
+            const totalCells = gridSize * gridSize;
+            for (const [ranking, count] of Object.entries(rankingCounts)) {
+                rankings.push({ ranking, proportion: count / totalCells });
+            }
+
+            return rankings.filter(r => r.proportion > 0.0001);
+        }
+    }, [candidates, dimensionMode]);
 
     // Calculate ranking regions for visualization
     const rankingRegions = useMemo(() => {
         const candNames = Object.keys(candidates);
-        const criticalPoints = [0, ...Object.values(indifferencePoints), 1].sort((a, b) => a - b);
+        
+        if (dimensionMode === '1d') {
+            const criticalPoints = [0, ...Object.values(indifferencePoints), 1].sort((a, b) => a - b);
 
-        // Remove duplicates
-        const uniquePoints = [...new Set(criticalPoints)];
+            // Remove duplicates
+            const uniquePoints = [...new Set(criticalPoints)];
 
-        // For each interval, determine ranking
-        const regions = [];
-        for (let i = 0; i < uniquePoints.length - 1; i++) {
-            const voterPos = (uniquePoints[i] + uniquePoints[i + 1]) / 2;
+            // For each interval, determine ranking
+            const regions = [];
+            for (let i = 0; i < uniquePoints.length - 1; i++) {
+                const voterPos = (uniquePoints[i] + uniquePoints[i + 1]) / 2;
 
-            const dists = candNames.map(name => ({
-                name,
-                dist: Math.abs(voterPos - candidates[name])
-            }));
+                const dists = candNames.map(name => ({
+                    name,
+                    dist: Math.abs(voterPos - candidates[name])
+                }));
 
-            dists.sort((a, b) => a.dist - b.dist);
+                dists.sort((a, b) => a.dist - b.dist);
 
-            const ranking = dists.map(d => d.name).join('>');
+                const ranking = dists.map(d => d.name).join('>');
 
-            regions.push({
-                start: uniquePoints[i],
-                end: uniquePoints[i + 1],
-                ranking
-            });
+                regions.push({
+                    start: uniquePoints[i],
+                    end: uniquePoints[i + 1],
+                    ranking
+                });
+            }
+
+            return regions;
+        } else {
+            // 2D mode: return grid of ranking data for visualization
+            // We'll compute this at render time in the visualization component
+            return [];
         }
-
-        return regions;
-    }, [candidates, indifferencePoints]);
+    }, [candidates, indifferencePoints, dimensionMode]);
 
     // Pairwise comparisons
     const pairwise = useMemo(() => {
@@ -609,7 +775,6 @@ function VotingAnalysis() {
     // Sincere threshold simulation - generates voters and computes results
     const sincereThresholdResults = useMemo(() => {
         const candNames = Object.keys(candidates);
-        const candPositions = candNames.map(name => candidates[name]);
 
         // Simple seeded random number generator
         const seededRandom = (seed) => {
@@ -624,7 +789,12 @@ function VotingAnalysis() {
         // Generate uniformly distributed voters
         const voters = [];
         for (let i = 0; i < numVoters; i++) {
-            voters.push(rng());
+            if (dimensionMode === '1d') {
+                voters.push(rng());
+            } else {
+                // 2D: voters are {x, y} points
+                voters.push({ x: rng(), y: rng() });
+            }
         }
 
         // Calculate approval votes for each voter
@@ -635,10 +805,16 @@ function VotingAnalysis() {
 
         voters.forEach(voterPos => {
             // Calculate distances to all candidates
-            const distances = candNames.map((name, idx) => ({
-                name,
-                distance: Math.abs(voterPos - candPositions[idx])
-            }));
+            const distances = candNames.map(name => {
+                const candPos = candidates[name];
+                let dist;
+                if (dimensionMode === '1d') {
+                    dist = Math.abs(voterPos - candPos);
+                } else {
+                    dist = Math.sqrt((voterPos.x - candPos.x) ** 2 + (voterPos.y - candPos.y) ** 2);
+                }
+                return { name, distance: dist };
+            });
 
             // Sort by distance
             distances.sort((a, b) => a.distance - b.distance);
@@ -692,12 +868,11 @@ function VotingAnalysis() {
             totalVoters: numVoters,
             voters // Return voters array for turn-based simulation
         };
-    }, [candidates, sincereThreshold, numVoters, useBasicStrategy, voterSeed]);
+    }, [candidates, dimensionMode, sincereThreshold, numVoters, useBasicStrategy, voterSeed]);
 
     // Run Monte Carlo simulation for sincere threshold
     const runSincereMonteCarlo = () => {
         const candNames = Object.keys(candidates);
-        const candPositions = candNames.map(name => candidates[name]);
         const winCounts = {};
         candNames.forEach(name => winCounts[name] = 0);
 
@@ -705,7 +880,11 @@ function VotingAnalysis() {
             // Generate uniformly distributed voters for this simulation
             const voters = [];
             for (let i = 0; i < numVoters; i++) {
-                voters.push(Math.random());
+                if (dimensionMode === '1d') {
+                    voters.push(Math.random());
+                } else {
+                    voters.push({ x: Math.random(), y: Math.random() });
+                }
             }
 
             // Calculate approval votes for each voter
@@ -714,10 +893,16 @@ function VotingAnalysis() {
 
             voters.forEach(voterPos => {
                 // Calculate distances to all candidates
-                const distances = candNames.map((name, idx) => ({
-                    name,
-                    distance: Math.abs(voterPos - candPositions[idx])
-                }));
+                const distances = candNames.map(name => {
+                    const candPos = candidates[name];
+                    let dist;
+                    if (dimensionMode === '1d') {
+                        dist = Math.abs(voterPos - candPos);
+                    } else {
+                        dist = Math.sqrt((voterPos.x - candPos.x) ** 2 + (voterPos.y - candPos.y) ** 2);
+                    }
+                    return { name, distance: dist };
+                });
 
                 // Sort by distance
                 distances.sort((a, b) => a.distance - b.distance);
@@ -753,12 +938,20 @@ function VotingAnalysis() {
     // Run turn-based AV strategy simulation
     const runTurnBasedSimulation = () => {
         const candNames = Object.keys(candidates);
-        const candPositions = candNames.map(name => candidates[name]);
         const voters = sincereThresholdResults.voters;
 
         const maxSteps = 50;
         const epsilon = 0.001;
         const steps = [];
+
+        // Helper to compute distance based on dimension mode
+        const computeDistance = (voterPos, candPos) => {
+            if (dimensionMode === '1d') {
+                return Math.abs(voterPos - candPos);
+            } else {
+                return Math.sqrt((voterPos.x - candPos.x) ** 2 + (voterPos.y - candPos.y) ** 2);
+            }
+        };
 
         // Simple seeded random number generator (needed for async updates)
         const seededRandom = (seed) => {
@@ -783,9 +976,9 @@ function VotingAnalysis() {
                 const voterThreshold = thresholds[voterIdx];
 
                 // Calculate distances to all candidates
-                const distances = candNames.map((name, idx) => ({
+                const distances = candNames.map(name => ({
                     name,
-                    distance: Math.abs(voterPos - candPositions[idx])
+                    distance: computeDistance(voterPos, candidates[name])
                 }));
 
                 distances.sort((a, b) => a.distance - b.distance);
@@ -876,7 +1069,7 @@ function VotingAnalysis() {
             const newThresholds = voters.map((voterPos, voterIdx) => {
                 const allDistances = candNames.map(candName => ({
                     name: candName,
-                    distance: Math.abs(voterPos - candidates[candName])
+                    distance: computeDistance(voterPos, candidates[candName])
                 }));
                 allDistances.sort((a, b) => a.distance - b.distance);
                 const closest = allDistances[0].name;
@@ -887,7 +1080,7 @@ function VotingAnalysis() {
                 if (prevStep.viableCandidates.length === 1) {
                     // Only one viable candidate (clear frontrunner)
                     const frontrunner = prevStep.viableCandidates[0];
-                    const frontrunnerDist = Math.abs(voterPos - candidates[frontrunner]);
+                    const frontrunnerDist = computeDistance(voterPos, candidates[frontrunner]);
 
                     if (closest === frontrunner) {
                         // Case 1: Frontrunner is first choice - bullet vote (approve only frontrunner)
@@ -906,7 +1099,7 @@ function VotingAnalysis() {
                     // Strategy: approve closest viable candidate (but never least favorite)
                     const viableDistances = prevStep.viableCandidates.map(candName => ({
                         name: candName,
-                        distance: Math.abs(voterPos - candidates[candName])
+                        distance: computeDistance(voterPos, candidates[candName])
                     }));
                     viableDistances.sort((a, b) => a.distance - b.distance);
                     const closestViableDist = viableDistances[0].distance;
@@ -996,10 +1189,18 @@ function VotingAnalysis() {
     const resetToDefaults = () => {
         // Reset all state to defaults
         setNumCandidates(3);
+        setDimensionMode('1d');
+        // 1D positions
         setC1(0.2);
         setC2(0.5);
         setC3(0.8);
         setC4(0.95);
+        // 2D positions
+        setC1_2d({ x: 0.2, y: 0.3 });
+        setC2_2d({ x: 0.5, y: 0.7 });
+        setC3_2d({ x: 0.8, y: 0.4 });
+        setC4_2d({ x: 0.3, y: 0.8 });
+        // Labels
         setLabel1('A');
         setLabel2('B');
         setLabel3('C');
@@ -1019,7 +1220,7 @@ function VotingAnalysis() {
             <h1 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '20px', color: '#f1f5f9' }}>AVLab - Approval Voting Strategy Analyzer</h1>
 
             <div style={{ marginBottom: '20px', backgroundColor: '#1e293b', padding: '15px', borderRadius: '8px', border: '1px solid #334155' }}>
-                <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: '600', color: '#f1f5f9' }}>Number of Candidates: {numCandidates}</span>
                     <button
                         onClick={removeCandidate}
@@ -1053,107 +1254,141 @@ function VotingAnalysis() {
                     >
                         Add Candidate
                     </button>
+                    <div style={{ marginLeft: '20px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <span style={{ fontWeight: '600', color: '#f1f5f9' }}>Space:</span>
+                        <button
+                            onClick={() => setDimensionMode('1d')}
+                            style={{
+                                padding: '6px 12px',
+                                borderRadius: '4px',
+                                backgroundColor: dimensionMode === '1d' ? '#3b82f6' : '#475569',
+                                border: 'none',
+                                color: '#fff',
+                                fontWeight: '600',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            1D Axis
+                        </button>
+                        <button
+                            onClick={() => setDimensionMode('2d')}
+                            style={{
+                                padding: '6px 12px',
+                                borderRadius: '4px',
+                                backgroundColor: dimensionMode === '2d' ? '#3b82f6' : '#475569',
+                                border: 'none',
+                                color: '#fff',
+                                fontWeight: '600',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            2D Plane
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            <div style={{ marginBottom: '20px' }}>
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
-                        C1 = {c1.toFixed(3)}
-                    </label>
-                    <input
-                        type="range"
-                        min="0.01"
-                        max={Math.min(0.99, c2 - 0.01)}
-                        step="0.01"
-                        value={c1}
-                        onChange={e => setC1(parseFloat(e.target.value))}
-                        style={{ width: '100%' }}
-                    />
-                </div>
+            {/* 1D Controls and Visualization */}
+            {dimensionMode === '1d' && (
+                <>
+                    <div style={{ marginBottom: '20px' }}>
+                        <div style={{ marginBottom: '15px' }}>
+                            <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
+                                C1 = {c1.toFixed(3)}
+                            </label>
+                            <input
+                                type="range"
+                                min="0.01"
+                                max={Math.min(0.99, c2 - 0.01)}
+                                step="0.01"
+                                value={c1}
+                                onChange={e => setC1(parseFloat(e.target.value))}
+                                style={{ width: '100%' }}
+                            />
+                        </div>
 
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
-                        C2 = {c2.toFixed(3)}
-                    </label>
-                    <input
-                        type="range"
-                        min={Math.max(0.01, c1 + 0.01)}
-                        max={numCandidates >= 3 ? Math.min(0.99, c3 - 0.01) : 0.99}
-                        step="0.01"
-                        value={c2}
-                        onChange={e => setC2(parseFloat(e.target.value))}
-                        style={{ width: '100%' }}
-                    />
-                </div>
+                        <div style={{ marginBottom: '15px' }}>
+                            <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
+                                C2 = {c2.toFixed(3)}
+                            </label>
+                            <input
+                                type="range"
+                                min={Math.max(0.01, c1 + 0.01)}
+                                max={numCandidates >= 3 ? Math.min(0.99, c3 - 0.01) : 0.99}
+                                step="0.01"
+                                value={c2}
+                                onChange={e => setC2(parseFloat(e.target.value))}
+                                style={{ width: '100%' }}
+                            />
+                        </div>
 
-                {numCandidates >= 3 && (
-                    <div style={{ marginBottom: '15px' }}>
-                        <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
-                            C3 = {c3.toFixed(3)}
-                        </label>
-                        <input
-                            type="range"
-                            min={Math.max(0.01, c2 + 0.01)}
-                            max={numCandidates >= 4 ? Math.min(0.99, c4 - 0.01) : 0.99}
-                            step="0.01"
-                            value={c3}
-                            onChange={e => setC3(parseFloat(e.target.value))}
-                            style={{ width: '100%' }}
-                        />
+                        {numCandidates >= 3 && (
+                            <div style={{ marginBottom: '15px' }}>
+                                <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
+                                    C3 = {c3.toFixed(3)}
+                                </label>
+                                <input
+                                    type="range"
+                                    min={Math.max(0.01, c2 + 0.01)}
+                                    max={numCandidates >= 4 ? Math.min(0.99, c4 - 0.01) : 0.99}
+                                    step="0.01"
+                                    value={c3}
+                                    onChange={e => setC3(parseFloat(e.target.value))}
+                                    style={{ width: '100%' }}
+                                />
+                            </div>
+                        )}
+
+                        {numCandidates >= 4 && (
+                            <div style={{ marginBottom: '15px' }}>
+                                <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
+                                    C4 = {c4.toFixed(3)}
+                                </label>
+                                <input
+                                    type="range"
+                                    min={Math.max(0.01, c3 + 0.01)}
+                                    max="0.99"
+                                    step="0.01"
+                                    value={c4}
+                                    onChange={e => setC4(parseFloat(e.target.value))}
+                                    style={{ width: '100%' }}
+                                />
+                            </div>
+                        )}
                     </div>
-                )}
 
-                {numCandidates >= 4 && (
-                    <div style={{ marginBottom: '15px' }}>
-                        <label style={{ display: 'block', fontWeight: '600', marginBottom: '5px', color: '#f1f5f9' }}>
-                            C4 = {c4.toFixed(3)}
-                        </label>
-                        <input
-                            type="range"
-                            min={Math.max(0.01, c3 + 0.01)}
-                            max="0.99"
-                            step="0.01"
-                            value={c4}
-                            onChange={e => setC4(parseFloat(e.target.value))}
-                            style={{ width: '100%' }}
-                        />
-                    </div>
-                )}
-            </div>
-
-            <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #334155' }}>
-                <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '5px', color: '#f1f5f9' }}>Interval [0,1]</h2>
-                <p style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '5px' }}>
-                    <strong>Drag candidates</strong> to change positions. Indifference points shown in purple.
-                </p>
-                <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '15px' }}>
-                    Indifference points: {Object.entries(indifferencePoints).map(([key, val], idx) => (
-                        <span key={key}>{idx > 0 ? ', ' : ''}{key.toUpperCase()}={val.toFixed(3)}</span>
-                    ))}
-                </p>
-                <svg ref={svgRef} width="100%" height="160" style={{ display: 'block', cursor: dragging ? 'grabbing' : 'default', touchAction: 'none', backgroundColor: '#0f172a' }}>
-                    {/* Ranking regions - showing where each voter type is located */}
-                    {rankingRegions.map((region, idx) => {
-                        const width = (region.end - region.start) * 100;
-                        const x = region.start * 100;
-                        const colors = {
-                            'C1>C2>C3': '#1e3a8a',
-                            'C1>C3>C2': '#831843',
-                            'C2>C1>C3': '#14532d',
-                            'C2>C3>C1': '#713f12',
-                            'C3>C1>C2': '#7c2d12',
-                            'C3>C2>C1': '#3730a3'
-                        };
-                        return (
-                            <g key={idx}>
-                                <rect
-                                    x={x + '%'}
-                                    y="10"
-                                    width={width + '%'}
-                                    height="30"
-                                    fill={colors[region.ranking] || '#374151'}
-                                    stroke="#64748b"
+                    <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #334155' }}>
+                        <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '5px', color: '#f1f5f9' }}>Interval [0,1]</h2>
+                        <p style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '5px' }}>
+                            <strong>Drag candidates</strong> to change positions. Indifference points shown in purple.
+                        </p>
+                        <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '15px' }}>
+                            Indifference points: {Object.entries(indifferencePoints).map(([key, val], idx) => (
+                                <span key={key}>{idx > 0 ? ', ' : ''}{key.toUpperCase()}={val.toFixed(3)}</span>
+                            ))}
+                        </p>
+                        <svg ref={svgRef} width="100%" height="160" style={{ display: 'block', cursor: dragging ? 'grabbing' : 'default', touchAction: 'none', backgroundColor: '#0f172a' }}>
+                            {/* Ranking regions - showing where each voter type is located */}
+                            {rankingRegions.map((region, idx) => {
+                                const width = (region.end - region.start) * 100;
+                                const x = region.start * 100;
+                                const regionColors = {
+                                    'C1>C2>C3': '#1e3a8a',
+                                    'C1>C3>C2': '#831843',
+                                    'C2>C1>C3': '#14532d',
+                                    'C2>C3>C1': '#713f12',
+                                    'C3>C1>C2': '#7c2d12',
+                                    'C3>C2>C1': '#3730a3'
+                                };
+                                return (
+                                    <g key={idx}>
+                                        <rect
+                                            x={x + '%'}
+                                            y="10"
+                                            width={width + '%'}
+                                            height="30"
+                                            fill={regionColors[region.ranking] || '#374151'}
+                                            stroke="#64748b"
                                     strokeWidth="0.5"
                                     opacity="0.8"
                                 />
@@ -1187,37 +1422,203 @@ function VotingAnalysis() {
                     <line x1="100%" y1="55" x2="100%" y2="65" stroke="#cbd5e1" strokeWidth="2" />
                     <text x="100%" y="75" fontSize="10" textAnchor="end" fill="#e2e8f0">1</text>
 
-                    {/* Indifference points (not draggable) */}
-                    {Object.entries(indifferencePoints).map(([key, value]) => {
-                        const label = key.toUpperCase();
-                        return (
-                            <g key={key}>
-                                <line x1={value * 100 + '%'} y1="55" x2={value * 100 + '%'} y2="65" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="2,2" />
-                                <text x={value * 100 + '%'} y="50" fontSize="8" fill="#a78bfa" textAnchor="middle">{label}</text>
-                            </g>
-                        );
-                    })}
+                        {/* Indifference points (not draggable) */}
+                        {Object.entries(indifferencePoints).map(([key, value]) => {
+                            const label = key.toUpperCase();
+                            return (
+                                <g key={key}>
+                                    <line x1={value * 100 + '%'} y1="55" x2={value * 100 + '%'} y2="65" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="2,2" />
+                                    <text x={value * 100 + '%'} y="50" fontSize="8" fill="#a78bfa" textAnchor="middle">{label}</text>
+                                </g>
+                            );
+                        })}
 
-                    {/* Candidates (draggable) */}
-                    {Object.entries(candidates).map(([candId, position], idx) => {
-                        const candKey = candId.toLowerCase();
-                        return (
-                            <g
-                                key={candId}
-                                onPointerDown={handlePointerDown(candKey)}
-                                onTouchStart={handlePointerDown(candKey)}
-                                style={{ cursor: 'grab', touchAction: 'none' }}
-                            >
-                                <circle cx={position * 100 + '%'} cy="100" r="8" fill={colors[idx]} stroke="#1e293b" strokeWidth="2" opacity="0.9" />
-                                <text x={position * 100 + '%'} y="120" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel(candId)}</text>
-                            </g>
-                        );
-                    })}
+                        {/* Candidates (draggable) */}
+                        {Object.entries(candidates).map(([candId, position], idx) => {
+                            const candKey = candId.toLowerCase();
+                            return (
+                                <g
+                                    key={candId}
+                                    onPointerDown={handlePointerDown(candKey)}
+                                    onTouchStart={handlePointerDown(candKey)}
+                                    style={{ cursor: 'grab', touchAction: 'none' }}
+                                >
+                                    <circle cx={position * 100 + '%'} cy="100" r="8" fill={colors[idx]} stroke="#1e293b" strokeWidth="2" opacity="0.9" />
+                                    <text x={position * 100 + '%'} y="120" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel(candId)}</text>
+                                </g>
+                            );
+                        })}
 
-                    {/* Legend for ranking regions */}
-                    <text x="0" y="145" fontSize="9" fill="#94a3b8">Voter Rankings by Location</text>
-                </svg>
-            </div>
+                        {/* Legend for ranking regions */}
+                        <text x="0" y="145" fontSize="9" fill="#94a3b8">Voter Rankings by Location</text>
+                    </svg>
+                </div>
+            </>
+            )}
+
+            {/* 2D Controls and Visualization */}
+            {dimensionMode === '2d' && (
+                <div style={{ backgroundColor: '#1e293b', padding: '20px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #334155' }}>
+                    <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '5px', color: '#f1f5f9' }}>Plane [0,1]×[0,1]</h2>
+                    <p style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '5px' }}>
+                        <strong>Drag candidates</strong> to change positions. Colors show Voronoi regions (closest candidate). Indifference lines shown in purple.
+                    </p>
+                    <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '15px' }}>
+                        Candidate positions: {Object.entries(candidates).map(([id, pos], idx) => (
+                            <span key={id}>{idx > 0 ? ', ' : ''}{getLabel(id)}=({pos.x.toFixed(2)},{pos.y.toFixed(2)})</span>
+                        ))}
+                    </p>
+                    <svg ref={svg2dRef} width="100%" height="500" viewBox="0 0 500 500" style={{ display: 'block', cursor: dragging ? 'grabbing' : 'default', touchAction: 'none', backgroundColor: '#0f172a', border: '1px solid #334155' }}>
+                        {/* Voronoi regions - render as colored pixels */}
+                        {(() => {
+                            const candNames = Object.keys(candidates);
+                            const gridSize = 50; // 50x50 grid for performance
+                            const cellSize = 500 / gridSize;
+                            const regionColors = {
+                                'C1': colors[0],
+                                'C2': colors[1],
+                                'C3': colors[2],
+                                'C4': colors[3]
+                            };
+                            const cells = [];
+                            
+                            for (let ix = 0; ix < gridSize; ix++) {
+                                for (let iy = 0; iy < gridSize; iy++) {
+                                    const px = (ix + 0.5) / gridSize;
+                                    const py = (iy + 0.5) / gridSize;
+                                    
+                                    // Find closest candidate
+                                    let minDist = Infinity;
+                                    let closest = candNames[0];
+                                    for (const name of candNames) {
+                                        const pos = candidates[name];
+                                        const dist = Math.sqrt((px - pos.x) ** 2 + (py - pos.y) ** 2);
+                                        if (dist < minDist) {
+                                            minDist = dist;
+                                            closest = name;
+                                        }
+                                    }
+                                    
+                                    cells.push(
+                                        <rect
+                                            key={`${ix}-${iy}`}
+                                            x={ix * cellSize}
+                                            y={iy * cellSize}
+                                            width={cellSize}
+                                            height={cellSize}
+                                            fill={regionColors[closest]}
+                                            opacity="0.3"
+                                        />
+                                    );
+                                }
+                            }
+                            return cells;
+                        })()}
+
+                        {/* Indifference lines (perpendicular bisectors) */}
+                        {Object.entries(indifferencePoints).map(([key, line]) => {
+                            const { midpoint, slope, c1: cand1, c2: cand2 } = line;
+                            let x1, y1, x2, y2;
+                            
+                            if (slope === 'vertical') {
+                                x1 = midpoint.x * 500;
+                                y1 = 0;
+                                x2 = midpoint.x * 500;
+                                y2 = 500;
+                            } else {
+                                // Line equation: y - my = slope * (x - mx)
+                                // Find intersections with boundaries
+                                const mx = midpoint.x * 500;
+                                const my = midpoint.y * 500;
+                                const m = slope;
+                                
+                                // Calculate line endpoints extending to boundaries
+                                // y = my + m * (x - mx)
+                                // At x = 0: y = my - m * mx
+                                // At x = 500: y = my + m * (500 - mx)
+                                const y_at_0 = my + m * (0 - mx);
+                                const y_at_500 = my + m * (500 - mx);
+                                
+                                // Clamp to viewport
+                                const points = [];
+                                if (y_at_0 >= 0 && y_at_0 <= 500) points.push({ x: 0, y: y_at_0 });
+                                if (y_at_500 >= 0 && y_at_500 <= 500) points.push({ x: 500, y: y_at_500 });
+                                
+                                // At y = 0: x = mx - my/m
+                                // At y = 500: x = mx + (500 - my)/m
+                                if (Math.abs(m) > 0.001) {
+                                    const x_at_0 = mx - my / m;
+                                    const x_at_500 = mx + (500 - my) / m;
+                                    if (x_at_0 >= 0 && x_at_0 <= 500) points.push({ x: x_at_0, y: 0 });
+                                    if (x_at_500 >= 0 && x_at_500 <= 500) points.push({ x: x_at_500, y: 500 });
+                                }
+                                
+                                if (points.length >= 2) {
+                                    x1 = points[0].x;
+                                    y1 = points[0].y;
+                                    x2 = points[1].x;
+                                    y2 = points[1].y;
+                                } else {
+                                    return null;
+                                }
+                            }
+                            
+                            return (
+                                <g key={key}>
+                                    <line
+                                        x1={x1}
+                                        y1={y1}
+                                        x2={x2}
+                                        y2={y2}
+                                        stroke="#a78bfa"
+                                        strokeWidth="2"
+                                        strokeDasharray="4,4"
+                                    />
+                                    <text
+                                        x={midpoint.x * 500}
+                                        y={midpoint.y * 500 - 8}
+                                        fontSize="10"
+                                        fill="#a78bfa"
+                                        textAnchor="middle"
+                                    >
+                                        {key.toUpperCase()}
+                                    </text>
+                                </g>
+                            );
+                        })}
+
+                        {/* Grid lines */}
+                        <line x1="250" y1="0" x2="250" y2="500" stroke="#475569" strokeWidth="1" strokeDasharray="2,2" />
+                        <line x1="0" y1="250" x2="500" y2="250" stroke="#475569" strokeWidth="1" strokeDasharray="2,2" />
+                        
+                        {/* Border */}
+                        <rect x="0" y="0" width="500" height="500" fill="none" stroke="#64748b" strokeWidth="2" />
+                        
+                        {/* Axis labels */}
+                        <text x="250" y="495" fontSize="10" textAnchor="middle" fill="#94a3b8">0.5</text>
+                        <text x="5" y="250" fontSize="10" textAnchor="start" fill="#94a3b8">0.5</text>
+                        <text x="5" y="12" fontSize="10" textAnchor="start" fill="#94a3b8">0</text>
+                        <text x="490" y="495" fontSize="10" textAnchor="end" fill="#94a3b8">1</text>
+                        <text x="5" y="495" fontSize="10" textAnchor="start" fill="#94a3b8">1</text>
+
+                        {/* Candidates (draggable) */}
+                        {Object.entries(candidates).map(([candId, position], idx) => {
+                            const candKey = candId.toLowerCase();
+                            return (
+                                <g
+                                    key={candId}
+                                    onPointerDown={handlePointerDown(candKey)}
+                                    onTouchStart={handlePointerDown(candKey)}
+                                    style={{ cursor: 'grab', touchAction: 'none' }}
+                                >
+                                    <circle cx={position.x * 500} cy={position.y * 500} r="12" fill={colors[idx]} stroke="#1e293b" strokeWidth="3" />
+                                    <text x={position.x * 500} y={position.y * 500 + 25} fontSize="12" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel(candId)}</text>
+                                </g>
+                            );
+                        })}
+                    </svg>
+                </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px', marginBottom: '20px' }}>
                 <div style={{ backgroundColor: '#14532d', padding: '15px', borderRadius: '8px', border: '1px solid #16a34a' }}>
