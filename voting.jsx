@@ -25,6 +25,9 @@ function VotingAnalysis() {
     const [label3, setLabel3] = useState('C');
     const [label4, setLabel4] = useState('D');
 
+    // RCV max ranks allowed (for ballot exhaustion)
+    const [maxRanksAllowed, setMaxRanksAllowed] = useState(4);
+
     // --- URL params handling: read initial params, respond to back/forward, and keep URL updated ---
     const parseAndApplyUrl = (replaceValues = true) => {
         try {
@@ -60,6 +63,9 @@ function VotingAnalysis() {
 
             const st = params.has('st') ? parseFloat(params.get('st')) : null;
             const bs = params.has('bs') ? (params.get('bs') === '1' || params.get('bs') === 'true') : null;
+
+            // Max ranks allowed for RCV
+            const mr = params.has('mr') ? parseInt(params.get('mr')) : null;
 
             const clamp = (v) => {
                 if (v === null || Number.isNaN(v)) return null;
@@ -117,6 +123,11 @@ function VotingAnalysis() {
                 const sv = parseFloat(params.get('sv'));
                 if (sv !== null && !Number.isNaN(sv) && sv >= 0.0 && sv <= 1.0) {
                     setSincereVoterProportion(sv);
+                }
+
+                // Max ranks allowed
+                if (mr !== null && !Number.isNaN(mr) && mr >= 1) {
+                    setMaxRanksAllowed(Math.min(mr, numCandidates));
                 }
             }
         } catch (err) {
@@ -183,6 +194,7 @@ function VotingAnalysis() {
             params.set('bs', useBasicStrategy ? '1' : '0');
             params.set('au', asyncUpdateRate.toFixed(1));
             params.set('sv', sincereVoterProportion.toFixed(1));
+            params.set('mr', maxRanksAllowed.toString());
 
             const newQuery = params.toString();
             const newUrl = window.location.pathname + (newQuery ? '?' + newQuery : '');
@@ -191,7 +203,7 @@ function VotingAnalysis() {
         } catch (err) {
             console.warn('Error updating URL params', err);
         }
-    }, [numCandidates, dimensionMode, c1, c2, c3, c4, c1_2d, c2_2d, c3_2d, c4_2d, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, asyncUpdateRate, sincereVoterProportion]);
+    }, [numCandidates, dimensionMode, c1, c2, c3, c4, c1_2d, c2_2d, c3_2d, c4_2d, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, asyncUpdateRate, sincereVoterProportion, maxRanksAllowed]);
 
     const handlePointerDown = (point) => (e) => {
         e.preventDefault();
@@ -403,15 +415,15 @@ function VotingAnalysis() {
 
             for (let ix = 0; ix < gridSize; ix++) {
                 for (let iy = 0; iy < gridSize; iy++) {
-                    const voterPos = { 
-                        x: (ix + 0.5) / gridSize, 
-                        y: (iy + 0.5) / gridSize 
+                    const voterPos = {
+                        x: (ix + 0.5) / gridSize,
+                        y: (iy + 0.5) / gridSize
                     };
 
                     const dists = candNames.map(name => ({
                         name,
                         dist: Math.sqrt(
-                            (voterPos.x - candidates[name].x) ** 2 + 
+                            (voterPos.x - candidates[name].x) ** 2 +
                             (voterPos.y - candidates[name].y) ** 2
                         )
                     }));
@@ -439,7 +451,7 @@ function VotingAnalysis() {
     // Calculate ranking regions for visualization
     const rankingRegions = useMemo(() => {
         const candNames = Object.keys(candidates);
-        
+
         if (dimensionMode === '1d') {
             const criticalPoints = [0, ...Object.values(indifferencePoints), 1].sort((a, b) => a - b);
 
@@ -599,33 +611,53 @@ function VotingAnalysis() {
         return ranking.split('>').map(c => getLabel(c).charAt(0)).join('>');
     };
 
-    // RCV rounds with reverse Borda tiebreaker
+    // RCV rounds with reverse Borda tiebreaker and ballot exhaustion
     const rcv = useMemo(() => {
         const rounds = [];
         let remaining = Object.keys(candidates);
         let voters = voterRankings.map(v => ({ ...v }));
+        let exhausted = 0;
+
+        // Apply max ranks limit to initial voter rankings
+        voters = voters.map(v => {
+            const rankedCandidates = v.ranking.split('>');
+            const limitedRanking = rankedCandidates.slice(0, maxRanksAllowed).join('>');
+            return { ranking: limitedRanking, proportion: v.proportion };
+        });
 
         while (remaining.length > 1) {
             const votes = {};
             remaining.forEach(c => votes[c] = 0);
+            let newExhausted = 0;
 
             voters.forEach(v => {
-                const first = v.ranking.split('>').find(c => remaining.includes(c));
-                if (first) votes[first] += v.proportion;
+                const first = v.ranking.split('>').filter(c => c !== '').find(c => remaining.includes(c));
+                if (first) {
+                    votes[first] += v.proportion;
+                } else {
+                    // Ballot is exhausted (no remaining candidates in their ranking)
+                    newExhausted += v.proportion;
+                }
             });
+
+            exhausted += newExhausted;
 
             const round = {};
             remaining.forEach(c => round[c] = votes[c]);
+            round.exhausted = exhausted;
 
             const sorted = Object.entries(votes).sort((a, b) => b[1] - a[1]);
-            if (sorted[0][1] > 0.5) {
-                rounds.push({ votes: round, eliminated: null });
-                rounds.push({ winner: sorted[0][0] });
+            const totalNonExhausted = 1 - exhausted;
+            
+            // Check for majority among non-exhausted ballots
+            if (totalNonExhausted > 0 && sorted.length > 0 && sorted[0][1] > totalNonExhausted / 2) {
+                rounds.push({ votes: round, eliminated: null, exhausted });
+                rounds.push({ winner: sorted[0][0], exhausted });
                 break;
             }
 
             // Find minimum vote count
-            const minVotes = sorted[sorted.length - 1][1];
+            const minVotes = sorted.length > 0 ? sorted[sorted.length - 1][1] : 0;
 
             // Get all candidates tied for last (with epsilon for floating point comparison)
             const epsilon = 0.0001;
@@ -634,14 +666,14 @@ function VotingAnalysis() {
             let eliminated;
             if (tiedForLast.length === 1) {
                 eliminated = tiedForLast[0];
-            } else {
+            } else if (tiedForLast.length > 1) {
                 // Break tie by reverse Borda count (HIGHEST score gets eliminated)
                 // Find the maximum Borda score among tied candidates
                 const maxBorda = Math.max(...tiedForLast.map(c => bordaScores[c]));
                 eliminated = tiedForLast.find(c => bordaScores[c] === maxBorda);
             }
 
-            rounds.push({ votes: round, eliminated });
+            rounds.push({ votes: round, eliminated, exhausted });
 
             remaining = remaining.filter(c => c !== eliminated);
             voters = voters.map(v => ({
@@ -651,7 +683,7 @@ function VotingAnalysis() {
         }
 
         return rounds;
-    }, [voterRankings, bordaScores, candidates]);
+    }, [voterRankings, bordaScores, candidates, maxRanksAllowed]);
 
     // AV critical profiles
     const avProfiles = useMemo(() => {
@@ -1207,6 +1239,7 @@ function VotingAnalysis() {
         setLabel4('D');
         setNumSimulations(1000);
         setDistributionType('uniform');
+        setMaxRanksAllowed(4);
 
         // Clear URL parameters
         window.history.replaceState({}, '', window.location.pathname);
@@ -1389,71 +1422,71 @@ function VotingAnalysis() {
                                             height="30"
                                             fill={regionColors[region.ranking] || '#374151'}
                                             stroke="#64748b"
-                                    strokeWidth="0.5"
-                                    opacity="0.8"
-                                />
-                                {width > 8 && (
-                                    <text
-                                        x={(x + width / 2) + '%'}
-                                        y="28"
-                                        fontSize="9"
-                                        textAnchor="middle"
-                                        fill="#e2e8f0"
-                                        fontFamily="monospace"
-                                        fontWeight="600"
+                                            strokeWidth="0.5"
+                                            opacity="0.8"
+                                        />
+                                        {width > 8 && (
+                                            <text
+                                                x={(x + width / 2) + '%'}
+                                                y="28"
+                                                fontSize="9"
+                                                textAnchor="middle"
+                                                fill="#e2e8f0"
+                                                fontFamily="monospace"
+                                                fontWeight="600"
+                                            >
+                                                {formatRankingCompact(region.ranking)}
+                                            </text>
+                                        )}
+                                    </g>
+                                );
+                            })}
+
+                            {/* Main interval line */}
+                            <line x1="0" y1="60" x2="100%" y2="60" stroke="#cbd5e1" strokeWidth="2" />
+
+                            {/* Endpoint markers */}
+                            <line x1="0" y1="55" x2="0" y2="65" stroke="#cbd5e1" strokeWidth="2" />
+                            <text x="0" y="75" fontSize="10" textAnchor="middle" fill="#e2e8f0">0</text>
+
+                            <line x1="50%" y1="55" x2="50%" y2="65" stroke="#cbd5e1" strokeWidth="2" />
+                            <text x="50%" y="75" fontSize="10" textAnchor="middle" fill="#e2e8f0">0.5</text>
+
+                            <line x1="100%" y1="55" x2="100%" y2="65" stroke="#cbd5e1" strokeWidth="2" />
+                            <text x="100%" y="75" fontSize="10" textAnchor="end" fill="#e2e8f0">1</text>
+
+                            {/* Indifference points (not draggable) */}
+                            {Object.entries(indifferencePoints).map(([key, value]) => {
+                                const label = key.toUpperCase();
+                                return (
+                                    <g key={key}>
+                                        <line x1={value * 100 + '%'} y1="55" x2={value * 100 + '%'} y2="65" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="2,2" />
+                                        <text x={value * 100 + '%'} y="50" fontSize="8" fill="#a78bfa" textAnchor="middle">{label}</text>
+                                    </g>
+                                );
+                            })}
+
+                            {/* Candidates (draggable) */}
+                            {Object.entries(candidates).map(([candId, position], idx) => {
+                                const candKey = candId.toLowerCase();
+                                return (
+                                    <g
+                                        key={candId}
+                                        onPointerDown={handlePointerDown(candKey)}
+                                        onTouchStart={handlePointerDown(candKey)}
+                                        style={{ cursor: 'grab', touchAction: 'none' }}
                                     >
-                                        {formatRankingCompact(region.ranking)}
-                                    </text>
-                                )}
-                            </g>
-                        );
-                    })}
+                                        <circle cx={position * 100 + '%'} cy="100" r="8" fill={colors[idx]} stroke="#1e293b" strokeWidth="2" opacity="0.9" />
+                                        <text x={position * 100 + '%'} y="120" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel(candId)}</text>
+                                    </g>
+                                );
+                            })}
 
-                    {/* Main interval line */}
-                    <line x1="0" y1="60" x2="100%" y2="60" stroke="#cbd5e1" strokeWidth="2" />
-
-                    {/* Endpoint markers */}
-                    <line x1="0" y1="55" x2="0" y2="65" stroke="#cbd5e1" strokeWidth="2" />
-                    <text x="0" y="75" fontSize="10" textAnchor="middle" fill="#e2e8f0">0</text>
-
-                    <line x1="50%" y1="55" x2="50%" y2="65" stroke="#cbd5e1" strokeWidth="2" />
-                    <text x="50%" y="75" fontSize="10" textAnchor="middle" fill="#e2e8f0">0.5</text>
-
-                    <line x1="100%" y1="55" x2="100%" y2="65" stroke="#cbd5e1" strokeWidth="2" />
-                    <text x="100%" y="75" fontSize="10" textAnchor="end" fill="#e2e8f0">1</text>
-
-                        {/* Indifference points (not draggable) */}
-                        {Object.entries(indifferencePoints).map(([key, value]) => {
-                            const label = key.toUpperCase();
-                            return (
-                                <g key={key}>
-                                    <line x1={value * 100 + '%'} y1="55" x2={value * 100 + '%'} y2="65" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="2,2" />
-                                    <text x={value * 100 + '%'} y="50" fontSize="8" fill="#a78bfa" textAnchor="middle">{label}</text>
-                                </g>
-                            );
-                        })}
-
-                        {/* Candidates (draggable) */}
-                        {Object.entries(candidates).map(([candId, position], idx) => {
-                            const candKey = candId.toLowerCase();
-                            return (
-                                <g
-                                    key={candId}
-                                    onPointerDown={handlePointerDown(candKey)}
-                                    onTouchStart={handlePointerDown(candKey)}
-                                    style={{ cursor: 'grab', touchAction: 'none' }}
-                                >
-                                    <circle cx={position * 100 + '%'} cy="100" r="8" fill={colors[idx]} stroke="#1e293b" strokeWidth="2" opacity="0.9" />
-                                    <text x={position * 100 + '%'} y="120" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#e2e8f0">{getLabel(candId)}</text>
-                                </g>
-                            );
-                        })}
-
-                        {/* Legend for ranking regions */}
-                        <text x="0" y="145" fontSize="9" fill="#94a3b8">Voter Rankings by Location</text>
-                    </svg>
-                </div>
-            </>
+                            {/* Legend for ranking regions */}
+                            <text x="0" y="145" fontSize="9" fill="#94a3b8">Voter Rankings by Location</text>
+                        </svg>
+                    </div>
+                </>
             )}
 
             {/* 2D Controls and Visualization */}
@@ -1481,12 +1514,12 @@ function VotingAnalysis() {
                                 'C4': colors[3]
                             };
                             const cells = [];
-                            
+
                             for (let ix = 0; ix < gridSize; ix++) {
                                 for (let iy = 0; iy < gridSize; iy++) {
                                     const px = (ix + 0.5) / gridSize;
                                     const py = (iy + 0.5) / gridSize;
-                                    
+
                                     // Find closest candidate
                                     let minDist = Infinity;
                                     let closest = candNames[0];
@@ -1498,7 +1531,7 @@ function VotingAnalysis() {
                                             closest = name;
                                         }
                                     }
-                                    
+
                                     cells.push(
                                         <rect
                                             key={`${ix}-${iy}`}
@@ -1519,7 +1552,7 @@ function VotingAnalysis() {
                         {Object.entries(indifferencePoints).map(([key, line]) => {
                             const { midpoint, slope, c1: cand1, c2: cand2 } = line;
                             let x1, y1, x2, y2;
-                            
+
                             if (slope === 'vertical') {
                                 x1 = midpoint.x * 500;
                                 y1 = 0;
@@ -1531,19 +1564,19 @@ function VotingAnalysis() {
                                 const mx = midpoint.x * 500;
                                 const my = midpoint.y * 500;
                                 const m = slope;
-                                
+
                                 // Calculate line endpoints extending to boundaries
                                 // y = my + m * (x - mx)
                                 // At x = 0: y = my - m * mx
                                 // At x = 500: y = my + m * (500 - mx)
                                 const y_at_0 = my + m * (0 - mx);
                                 const y_at_500 = my + m * (500 - mx);
-                                
+
                                 // Clamp to viewport
                                 const points = [];
                                 if (y_at_0 >= 0 && y_at_0 <= 500) points.push({ x: 0, y: y_at_0 });
                                 if (y_at_500 >= 0 && y_at_500 <= 500) points.push({ x: 500, y: y_at_500 });
-                                
+
                                 // At y = 0: x = mx - my/m
                                 // At y = 500: x = mx + (500 - my)/m
                                 if (Math.abs(m) > 0.001) {
@@ -1552,7 +1585,7 @@ function VotingAnalysis() {
                                     if (x_at_0 >= 0 && x_at_0 <= 500) points.push({ x: x_at_0, y: 0 });
                                     if (x_at_500 >= 0 && x_at_500 <= 500) points.push({ x: x_at_500, y: 500 });
                                 }
-                                
+
                                 if (points.length >= 2) {
                                     x1 = points[0].x;
                                     y1 = points[0].y;
@@ -1562,7 +1595,7 @@ function VotingAnalysis() {
                                     return null;
                                 }
                             }
-                            
+
                             return (
                                 <g key={key}>
                                     <line
@@ -1590,10 +1623,10 @@ function VotingAnalysis() {
                         {/* Grid lines */}
                         <line x1="250" y1="0" x2="250" y2="500" stroke="#475569" strokeWidth="1" strokeDasharray="2,2" />
                         <line x1="0" y1="250" x2="500" y2="250" stroke="#475569" strokeWidth="1" strokeDasharray="2,2" />
-                        
+
                         {/* Border */}
                         <rect x="0" y="0" width="500" height="500" fill="none" stroke="#64748b" strokeWidth="2" />
-                        
+
                         {/* Axis labels */}
                         <text x="250" y="495" fontSize="10" textAnchor="middle" fill="#94a3b8">0.5</text>
                         <text x="5" y="250" fontSize="10" textAnchor="start" fill="#94a3b8">0.5</text>
@@ -1622,49 +1655,92 @@ function VotingAnalysis() {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px', marginBottom: '20px' }}>
                 <div style={{ backgroundColor: '#14532d', padding: '15px', borderRadius: '8px', border: '1px solid #16a34a' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#86efac' }}>
-                        RCV Rounds
+                    <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '5px', color: '#86efac' }}>
+                        IRV Rounds
                         {condorcetInfo.winner !== 'None' && (
                             <span style={{ fontSize: '12px', fontWeight: 'normal', marginLeft: '8px', color: '#4ade80' }}>
                                 (Condorcet Winner: {getLabel(condorcetInfo.winner)})
                             </span>
                         )}
                     </h3>
-                    {rcv.map((round, i) => (
-                        <div key={i} style={{ fontSize: '13px', marginBottom: '8px', color: '#e2e8f0' }}>
-                            {round.winner ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <span style={{ fontSize: '16px' }}>🥇</span>
-                                    <strong style={{ color: '#4ade80' }}>Winner: {getLabel(round.winner)}</strong>
-                                    {round.winner === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
-                                        <span style={{ fontSize: '16px' }}>🏆</span>
-                                    )}
-                                </div>
-                            ) : (
-                                <div>
-                                    <div style={{ fontWeight: '600', marginBottom: '3px' }}>Round {i + 1}:</div>
-                                    {Object.entries(round.votes).sort((a, b) => b[1] - a[1]).map(([c, v], idx) => (
-                                        <div key={c} style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                <div style={{ width: '32px', display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '2px' }}>
-                                                    {round.eliminated === c && <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '16px' }}>✗</span>}
-                                                    {idx === 0 && !round.eliminated && <span style={{ fontSize: '14px' }}>⭐</span>}
-                                                    {c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
-                                                        <span style={{ fontSize: '14px' }}>🏆</span>
-                                                    )}
-                                                </div>
-                                                <div style={{ minWidth: '60px' }}>{getLabel(c)}</div>
-                                                <div>{(v * 100).toFixed(1)}%</div>
-                                            </div>
-                                            {round.eliminated === c && c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
-                                                <div style={{ fontSize: '11px', color: '#fbbf24', fontStyle: 'italic' }}>(Condorcet Winner Eliminated)</div>
+                    <div style={{ marginBottom: '10px' }}>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '5px', color: '#86efac' }}>
+                            Max Ranks Allowed: {maxRanksAllowed}
+                        </label>
+                        <input
+                            type="range"
+                            min="1"
+                            max={Object.keys(candidates).length}
+                            step="1"
+                            value={maxRanksAllowed}
+                            onChange={(e) => setMaxRanksAllowed(parseInt(e.target.value))}
+                            style={{ width: '100%', cursor: 'pointer' }}
+                        />
+                    </div>
+                    {rcv.map((round, i) => {
+                        const totalNonExhausted = 1 - (round.exhausted || 0);
+                        return (
+                            <div key={i} style={{ fontSize: '13px', marginBottom: '8px', color: '#e2e8f0' }}>
+                                {round.winner ? (
+                                    <div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                                            <span style={{ fontSize: '16px' }}>🥇</span>
+                                            <strong style={{ color: '#4ade80' }}>Winner: {getLabel(round.winner)}</strong>
+                                            {round.winner === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
+                                                <span style={{ fontSize: '16px' }}>🏆</span>
                                             )}
                                         </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    ))}
+                                        {round.exhausted > 0 && (
+                                            <div style={{ fontSize: '12px', color: '#cbd5e1', marginLeft: '28px' }}>
+                                                Exhausted: {(round.exhausted * 100).toFixed(1)}%
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <div style={{ fontWeight: '600', marginBottom: '3px' }}>Round {i + 1}:</div>
+                                        {Object.entries(round.votes)
+                                            .filter(([c]) => c !== 'exhausted')
+                                            .sort((a, b) => b[1] - a[1])
+                                            .map(([c, v], idx) => {
+                                                const pctTotal = (v * 100).toFixed(1);
+                                                const pctNonExhausted = totalNonExhausted > 0 ? ((v / totalNonExhausted) * 100).toFixed(1) : '0.0';
+                                                return (
+                                                    <div key={c} style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            <div style={{ width: '32px', display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '2px' }}>
+                                                                {round.eliminated === c && <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '16px' }}>✗</span>}
+                                                                {idx === 0 && !round.eliminated && <span style={{ fontSize: '14px' }}>⭐</span>}
+                                                                {c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
+                                                                    <span style={{ fontSize: '14px' }}>🏆</span>
+                                                                )}
+                                                            </div>
+                                                            <div style={{ minWidth: '60px' }}>{getLabel(c)}</div>
+                                                            <div>
+                                                                {pctTotal}%
+                                                                {round.exhausted > 0 && (
+                                                                    <span style={{ color: '#86efac', marginLeft: '4px' }}>({pctNonExhausted}%)</span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        {round.eliminated === c && c === condorcetInfo.winner && condorcetInfo.winner !== 'None' && (
+                                                            <div style={{ fontSize: '11px', color: '#fbbf24', fontStyle: 'italic' }}>(Condorcet Winner Eliminated)</div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        {round.exhausted > 0 && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', paddingLeft: '40px' }}>
+                                                <div style={{ color: '#94a3b8', fontSize: '12px' }}>
+                                                    Exhausted: {(round.exhausted * 100).toFixed(1)}%
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
 
                 <div style={{ backgroundColor: '#1e3a5f', padding: '15px', borderRadius: '8px', border: '1px solid #2563eb' }}>
