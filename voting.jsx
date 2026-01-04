@@ -383,8 +383,10 @@ function VotingAnalysis() {
 
             points.sort((a, b) => a - b);
 
-            // For each interval, determine ranking
+            // For each interval, determine ranking and track intervals
             const rankings = [];
+            const rankingIntervals = {}; // Track intervals for each ranking
+            
             for (let i = 0; i < points.length - 1; i++) {
                 const voterPos = (points[i] + points[i + 1]) / 2;
 
@@ -398,13 +400,44 @@ function VotingAnalysis() {
                 const ranking = dists.map(d => d.name).join('>');
                 const proportion = points[i + 1] - points[i];
 
+                // Track the interval for this ranking
+                if (!rankingIntervals[ranking]) {
+                    rankingIntervals[ranking] = [];
+                }
+                rankingIntervals[ranking].push({ start: points[i], end: points[i + 1] });
+
                 const found = rankings.find(r => r.ranking === ranking);
                 if (found) {
                     found.proportion += proportion;
                 } else {
-                    rankings.push({ ranking, proportion });
+                    rankings.push({ ranking, proportion, intervals: [] });
                 }
             }
+
+            // Merge adjacent intervals for each ranking
+            rankings.forEach(r => {
+                const intervals = rankingIntervals[r.ranking];
+                if (intervals && intervals.length > 0) {
+                    // Sort intervals by start
+                    intervals.sort((a, b) => a.start - b.start);
+                    
+                    // Merge adjacent/overlapping intervals
+                    const merged = [intervals[0]];
+                    for (let i = 1; i < intervals.length; i++) {
+                        const current = intervals[i];
+                        const last = merged[merged.length - 1];
+                        
+                        // If intervals are adjacent or overlap, merge them
+                        if (Math.abs(current.start - last.end) < 0.0001) {
+                            last.end = current.end;
+                        } else {
+                            merged.push(current);
+                        }
+                    }
+                    
+                    r.intervals = merged;
+                }
+            });
 
             return rankings.filter(r => r.proportion > 0.0001);
         } else {
@@ -1778,11 +1811,21 @@ function VotingAnalysis() {
             <div style={{ backgroundColor: '#78350f', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #f59e0b' }}>
                 <h3 style={{ fontSize: '16px', fontWeight: 'bold', marginBottom: '10px', color: '#fde68a' }}>Voter Rankings</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px' }}>
-                    {voterRankings.sort((a, b) => b.proportion - a.proportion).map(v => (
-                        <div key={v.ranking} style={{ fontSize: '13px', color: '#e2e8f0' }}>
-                            <span style={{ fontFamily: 'monospace' }}>{formatRanking(v.ranking)}</span>: {(v.proportion * 100).toFixed(1)}%
-                        </div>
-                    ))}
+                    {voterRankings.sort((a, b) => b.proportion - a.proportion).map(v => {
+                        // Format intervals for display
+                        const intervalsText = v.intervals && v.intervals.length > 0
+                            ? v.intervals.map(interval => `(${interval.start.toFixed(2)},${interval.end.toFixed(2)})`).join(', ')
+                            : null;
+                        
+                        return (
+                            <div key={v.ranking} style={{ fontSize: '13px', color: '#e2e8f0' }}>
+                                <span style={{ fontFamily: 'monospace' }}>{formatRanking(v.ranking)}</span>: {(v.proportion * 100).toFixed(1)}%
+                                {intervalsText && dimensionMode === '1d' && (
+                                    <span style={{ color: '#fbbf24', marginLeft: '4px' }}>{intervalsText}</span>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 
