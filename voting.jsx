@@ -49,7 +49,7 @@ function VotingAnalysis() {
                 const x = parseFloat(parts[0]);
                 const y = parseFloat(parts[1]);
                 if (Number.isNaN(x) || Number.isNaN(y)) return null;
-                return { x: Math.max(0.01, Math.min(0.99, x)), y: Math.max(0.01, Math.min(0.99, y)) };
+                return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
             };
             const p1_2d = parse2d('c1_2d');
             const p2_2d = parse2d('c2_2d');
@@ -69,8 +69,8 @@ function VotingAnalysis() {
 
             const clamp = (v) => {
                 if (v === null || Number.isNaN(v)) return null;
-                // round to 2 decimals, clamp to [0.01,0.99]
-                return Math.round(Math.max(0.01, Math.min(0.99, v)) * 100) / 100;
+                // round to 2 decimals, clamp to [0,1]
+                return Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
             };
 
             let nn = pn !== null ? Math.max(2, Math.min(4, pn)) : numCandidates;
@@ -221,7 +221,7 @@ function VotingAnalysis() {
             // Handle both mouse and touch events
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const x = (clientX - rect.left) / rect.width;
-            const clampedX = Math.max(0.01, Math.min(0.99, x));
+            const clampedX = Math.max(0, Math.min(1, x));
 
             // Round to nearest 0.01 for cleaner values
             const roundedX = Math.round(clampedX * 100) / 100;
@@ -247,8 +247,8 @@ function VotingAnalysis() {
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
             const x = (clientX - rect.left) / rect.width;
             const y = (clientY - rect.top) / rect.height;
-            const clampedX = Math.max(0.01, Math.min(0.99, x));
-            const clampedY = Math.max(0.01, Math.min(0.99, y));
+            const clampedX = Math.max(0, Math.min(1, x));
+            const clampedY = Math.max(0, Math.min(1, y));
 
             const roundedX = Math.round(clampedX * 100) / 100;
             const roundedY = Math.round(clampedY * 100) / 100;
