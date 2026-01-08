@@ -1086,6 +1086,7 @@ function VotingAnalysis() {
 
             const votesPerVoter = [];
             const ballotCounts = {}; // Track unique ballots and their counts
+            const voterBallots = []; // Track each voter's ballot
 
             voters.forEach((voterPos, voterIdx) => {
                 const voterThreshold = thresholds[voterIdx];
@@ -1130,6 +1131,8 @@ function VotingAnalysis() {
 
                 // Create ballot key ordered by voter's preference (distances already sorted)
                 const ballotKey = approvedCandidates.join(',');
+                voterBallots.push(ballotKey);
+                
                 if (ballotKey) { // Only count non-empty ballots
                     ballotCounts[ballotKey] = (ballotCounts[ballotKey] || 0) + 1;
                 }
@@ -1157,13 +1160,18 @@ function VotingAnalysis() {
             // Calculate mean ballot size
             const meanBallotSize = votesPerVoter.reduce((sum, v) => sum + v, 0) / voters.length;
 
+            // Track top 2 frontrunners
+            const frontrunners = sorted.slice(0, 2).map(([cand]) => cand);
+
             return {
                 approvalCounts,
                 winner,
                 viableCandidates,
                 votesDistribution,
                 meanBallotSize,
-                ballotCounts
+                ballotCounts,
+                voterBallots,
+                frontrunners
             };
         };
 
@@ -1174,6 +1182,39 @@ function VotingAnalysis() {
             ...step0,
             thresholds: [...currentThresholds]
         });
+
+        // Helper to determine what candidates a voter is currently approving
+        const getCurrentApprovals = (voterPos, threshold) => {
+            const distances = candNames.map(name => ({
+                name,
+                distance: computeDistance(voterPos, candidates[name])
+            }));
+            distances.sort((a, b) => a.distance - b.distance);
+
+            const approved = new Set();
+
+            if (useBasicStrategy) {
+                // Always approve closest
+                approved.add(distances[0].name);
+
+                // Check middle candidates against threshold
+                for (let i = 1; i < distances.length - 1; i++) {
+                    if (distances[i].distance <= threshold) {
+                        approved.add(distances[i].name);
+                    }
+                }
+                // Never approve furthest (skip distances[distances.length - 1])
+            } else {
+                // Approve all candidates within threshold
+                distances.forEach(d => {
+                    if (d.distance <= threshold) {
+                        approved.add(d.name);
+                    }
+                });
+            }
+
+            return approved;
+        };
 
         // Iterate until convergence
         for (let stepNum = 1; stepNum <= maxSteps; stepNum++) {
@@ -1200,10 +1241,12 @@ function VotingAnalysis() {
                 const preferredTopTwo = topCandDist <= secondCandDist ? topCandidate : secondCandidate;
                 const lessPreferredTopTwo = topCandDist <= secondCandDist ? secondCandidate : topCandidate;
 
-                // Check current approvals with previous threshold
+                // Check what this voter is currently approving (accounting for basic strategy)
                 const currentThreshold = prevStep.thresholds[voterIdx];
-                const currentlyApprovingTop = topCandDist <= currentThreshold;
-                const currentlyApprovingSecond = secondCandDist <= currentThreshold;
+                const currentApprovals = getCurrentApprovals(voterPos, currentThreshold);
+                
+                const currentlyApprovingTop = currentApprovals.has(topCandidate);
+                const currentlyApprovingSecond = currentApprovals.has(secondCandidate);
 
                 // Rule 2: If currently approving exactly one of the top two, don't change
                 const approvingExactlyOne = (currentlyApprovingTop && !currentlyApprovingSecond) ||
@@ -1246,10 +1289,29 @@ function VotingAnalysis() {
             });
 
             const currentStep = computeStep(updatedThresholds);
+            
+            // Compute ballot transitions from previous step
+            const transitions = {};
+            let votersUnchanged = 0;
+            
+            voters.forEach((voterPos, voterIdx) => {
+                const prevBallot = prevStep.voterBallots[voterIdx];
+                const currBallot = currentStep.voterBallots[voterIdx];
+                
+                if (prevBallot === currBallot) {
+                    votersUnchanged++;
+                } else {
+                    const transitionKey = `${prevBallot || '∅'}→${currBallot || '∅'}`;
+                    transitions[transitionKey] = (transitions[transitionKey] || 0) + 1;
+                }
+            });
+            
             steps.push({
                 stepNumber: stepNum,
                 ...currentStep,
-                thresholds: [...updatedThresholds]
+                thresholds: [...updatedThresholds],
+                transitions,
+                votersUnchanged
             });
 
             // Check for convergence: no voter changed their ballot
@@ -2607,6 +2669,62 @@ function VotingAnalysis() {
                                 })()}
                             </div>
                         </div>
+
+                        {currentStep > 0 && turnBasedResults[currentStep].transitions && (
+                            <div style={{ marginTop: '15px', backgroundColor: '#1e1b4b', padding: '12px', borderRadius: '4px' }}>
+                                <h5 style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '10px', color: '#c4b5fd' }}>
+                                    Ballot Changes from Step {currentStep - 1} to Step {currentStep}
+                                </h5>
+                                
+                                <div style={{ marginBottom: '12px', padding: '8px', backgroundColor: '#312e81', borderRadius: '4px', fontSize: '11px' }}>
+                                    <div style={{ color: '#a78bfa', marginBottom: '4px', fontWeight: 'bold' }}>
+                                        Frontrunners at Step {currentStep - 1}:
+                                    </div>
+                                    <div style={{ color: '#e9d5ff' }}>
+                                        {turnBasedResults[currentStep - 1].frontrunners && turnBasedResults[currentStep - 1].frontrunners.length >= 2
+                                            ? `${getLabel(turnBasedResults[currentStep - 1].frontrunners[0])} vs ${getLabel(turnBasedResults[currentStep - 1].frontrunners[1])}`
+                                            : turnBasedResults[currentStep - 1].frontrunners && turnBasedResults[currentStep - 1].frontrunners.length === 1
+                                            ? `${getLabel(turnBasedResults[currentStep - 1].frontrunners[0])}`
+                                            : 'Unknown'}
+                                    </div>
+                                </div>
+                                
+                                <div style={{ marginBottom: '12px', fontSize: '12px', color: '#e9d5ff' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', backgroundColor: '#312e81', borderRadius: '4px' }}>
+                                        <span style={{ fontWeight: 'bold' }}>Voters Unchanged:</span>
+                                        <span>{turnBasedResults[currentStep].votersUnchanged} ({((turnBasedResults[currentStep].votersUnchanged / numVoters) * 100).toFixed(1)}%)</span>
+                                    </div>
+                                </div>
+                                {Object.keys(turnBasedResults[currentStep].transitions).length > 0 && (
+                                    <>
+                                        <div style={{ fontSize: '11px', color: '#c4b5fd', marginBottom: '6px', fontWeight: 'bold' }}>
+                                            Ballot Transitions:
+                                        </div>
+                                        <div style={{ fontSize: '12px', color: '#e2e8f0', maxHeight: '300px', overflowY: 'auto' }}>
+                                            {Object.entries(turnBasedResults[currentStep].transitions)
+                                                .sort((a, b) => b[1] - a[1])
+                                                .map(([transition, count]) => {
+                                                    const [from, to] = transition.split('→');
+                                                    const fromLabels = from === '∅' ? '∅' : from.split(',').map(c => getLabel(c)).join(', ');
+                                                    const toLabels = to === '∅' ? '∅' : to.split(',').map(c => getLabel(c)).join(', ');
+                                                    const percentage = (count / numVoters) * 100;
+                                                    
+                                                    return (
+                                                        <div key={transition} style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
+                                                            <span style={{ fontFamily: 'monospace', color: '#e9d5ff', fontSize: '11px' }}>
+                                                                [{fromLabels}] → [{toLabels}]
+                                                            </span>
+                                                            <span style={{ color: '#cbd5e1', fontSize: '10px', marginLeft: '8px', whiteSpace: 'nowrap' }}>
+                                                                {count} voters ({percentage.toFixed(1)}%)
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        )}
 
                         <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '12px', fontStyle: 'italic' }}>
                             Each step, voters adjust strategically: viable candidates are within 3% of first place. Strategic voters never approve their least favorite candidate. If multiple are viable, voters approve their closest viable. If only one is viable (clear frontrunner), voters who have the frontrunner within their sincere threshold approve up to and including the frontrunner, while those who don't approve only candidates closer than the frontrunner. {(sincereVoterProportion * 100).toFixed(0)}% of voters are sincere and always vote with their initial threshold. Of the remaining {((1 - sincereVoterProportion) * 100).toFixed(0)}% strategic voters, {(asyncUpdateRate * 100).toFixed(0)}% update each step (= {(asyncUpdateRate * (1 - sincereVoterProportion) * 100).toFixed(1)}% of all voters).
