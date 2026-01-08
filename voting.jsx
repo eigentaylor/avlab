@@ -386,7 +386,7 @@ function VotingAnalysis() {
             // For each interval, determine ranking and track intervals
             const rankings = [];
             const rankingIntervals = {}; // Track intervals for each ranking
-            
+
             for (let i = 0; i < points.length - 1; i++) {
                 const voterPos = (points[i] + points[i + 1]) / 2;
 
@@ -420,13 +420,13 @@ function VotingAnalysis() {
                 if (intervals && intervals.length > 0) {
                     // Sort intervals by start
                     intervals.sort((a, b) => a.start - b.start);
-                    
+
                     // Merge adjacent/overlapping intervals
                     const merged = [intervals[0]];
                     for (let i = 1; i < intervals.length; i++) {
                         const current = intervals[i];
                         const last = merged[merged.length - 1];
-                        
+
                         // If intervals are adjacent or overlap, merge them
                         if (Math.abs(current.start - last.end) < 0.0001) {
                             last.end = current.end;
@@ -434,7 +434,7 @@ function VotingAnalysis() {
                             merged.push(current);
                         }
                     }
-                    
+
                     r.intervals = merged;
                 }
             });
@@ -634,6 +634,40 @@ function VotingAnalysis() {
         return labels[candId] || candId;
     };
 
+    // Special regions for 3-candidate case
+    const specialRegions = useMemo(() => {
+        if (numCandidates !== 3 || dimensionMode !== '1d') return null;
+
+        const eps = c3 - c1 - 0.5;
+        if (eps <= 0) return null;
+
+        const regions = [];
+
+        if (true) {
+            // c1 region
+            const center = 0.5 - c1;
+            regions.push({
+                center: center,
+                start: Math.max(0, center - eps, c1),
+                end: Math.min(1, center + eps),
+                type: 'c1'
+            });
+        }
+
+        if (true) {
+            // c3 region
+            const center = 1.5 - c3;
+            regions.push({
+                center: center,
+                start: Math.max(0, center - eps),
+                end: Math.min(1, center + eps, c3),
+                type: 'c3'
+            });
+        }
+
+        return { eps, regions };
+    }, [numCandidates, dimensionMode, c1, c3]);
+
     // Convert ranking string to use custom labels (e.g., "C1>C2>C3" → "Alice>Bob>Charlie")
     const formatRanking = (ranking) => {
         return ranking.split('>').map(c => getLabel(c)).join('>');
@@ -681,7 +715,7 @@ function VotingAnalysis() {
 
             const sorted = Object.entries(votes).sort((a, b) => b[1] - a[1]);
             const totalNonExhausted = 1 - exhausted;
-            
+
             // Check for majority among non-exhausted ballots
             if (totalNonExhausted > 0 && sorted.length > 0 && sorted[0][1] > totalNonExhausted / 2) {
                 rounds.push({ votes: round, eliminated: null, exhausted });
@@ -1433,6 +1467,22 @@ function VotingAnalysis() {
                                 <span key={key}>{idx > 0 ? ', ' : ''}{key.toUpperCase()}={val.toFixed(3)}</span>
                             ))}
                         </p>
+                        {specialRegions && (
+                            <p style={{ fontSize: '11px', color: '#fbbf24', marginBottom: '15px' }}>
+                                ε = {specialRegions.eps.toFixed(3)} (C3 - C1 - 0.5).
+                                {specialRegions.regions.length > 0 && (
+                                    <span>
+                                        Special regions shown in yellow:
+                                        {specialRegions.regions.map((r, i) => (
+                                            <span key={i}>
+                                                {i > 0 ? ', ' : ' '}
+                                                {r.type === 'c1' ? `dist(x, ${(0.5 - c1).toFixed(3)}) ≤ ε` : `dist(x, ${(1.5 - c3).toFixed(3)}) ≤ ε`}
+                                            </span>
+                                        ))}
+                                    </span>
+                                )}
+                            </p>
+                        )}
                         <svg ref={svgRef} width="100%" height="160" style={{ display: 'block', cursor: dragging ? 'grabbing' : 'default', touchAction: 'none', backgroundColor: '#0f172a' }}>
                             {/* Ranking regions - showing where each voter type is located */}
                             {rankingRegions.map((region, idx) => {
@@ -1487,6 +1537,44 @@ function VotingAnalysis() {
 
                             <line x1="100%" y1="55" x2="100%" y2="65" stroke="#cbd5e1" strokeWidth="2" />
                             <text x="100%" y="75" fontSize="10" textAnchor="end" fill="#e2e8f0">1</text>
+
+                            {/* Special regions for 3-candidate case */}
+                            {specialRegions && specialRegions.regions.map((region, idx) => {
+                                const width = (region.end - region.start) * 100;
+                                const x = region.start * 100;
+                                const centerX = region.center * 100;
+                                return (
+                                    <g key={`special-${idx}`}>
+                                        <rect
+                                            x={x + '%'}
+                                            y="85"
+                                            width={width + '%'}
+                                            height="10"
+                                            fill="#fbbf24"
+                                            opacity="0.6"
+                                            stroke="#f59e0b"
+                                            strokeWidth="1"
+                                        />
+                                        <line
+                                            x1={centerX + '%'}
+                                            y1="83"
+                                            x2={centerX + '%'}
+                                            y2="97"
+                                            stroke="#f59e0b"
+                                            strokeWidth="1.5"
+                                        />
+                                        <text
+                                            x={centerX + '%'}
+                                            y="105"
+                                            fontSize="8"
+                                            fill="#fbbf24"
+                                            textAnchor="middle"
+                                        >
+                                            {region.center.toFixed(3)}
+                                        </text>
+                                    </g>
+                                );
+                            })}
 
                             {/* Indifference points (not draggable) */}
                             {Object.entries(indifferencePoints).map(([key, value]) => {
@@ -1816,7 +1904,7 @@ function VotingAnalysis() {
                         const intervalsText = v.intervals && v.intervals.length > 0
                             ? v.intervals.map(interval => `(${interval.start.toFixed(2)},${interval.end.toFixed(2)})`).join(', ')
                             : null;
-                        
+
                         return (
                             <div key={v.ranking} style={{ fontSize: '13px', color: '#e2e8f0' }}>
                                 <span style={{ fontFamily: 'monospace' }}>{formatRanking(v.ranking)}</span>: {(v.proportion * 100).toFixed(1)}%
