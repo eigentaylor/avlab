@@ -634,39 +634,48 @@ function VotingAnalysis() {
         return labels[candId] || candId;
     };
 
-    // Special regions for 3-candidate case
+    // Special regions for 3-candidate case (center winning regions)
     const specialRegions = useMemo(() => {
         if (numCandidates !== 3 || dimensionMode !== '1d') return null;
 
-        const eps = c3 - c1 - 0.5;
+        // Sort candidates by position to find the middle one
+        const positions = [
+            { id: 'C1', pos: c1 },
+            { id: 'C2', pos: c2 },
+            { id: 'C3', pos: c3 }
+        ].sort((a, b) => a.pos - b.pos);
+
+        const left = positions[0];
+        const middle = positions[1];
+        const right = positions[2];
+
+        const eps = right.pos - left.pos - 0.5;
         if (eps <= 0) return null;
 
         const regions = [];
 
-        if (true) {
-            // c1 region
-            const center = 0.5 - c1;
-            regions.push({
-                center: center,
-                start: Math.max(0, center - eps, c1),
-                end: Math.min(1, center + eps),
-                type: 'c1'
-            });
-        }
+        // Left candidate region: center at 0.5 - left.pos
+        const leftCenter = 0.5 - left.pos;
+        regions.push({
+            center: leftCenter,
+            start: Math.max(0, leftCenter - eps, left.pos),
+            end: Math.min(1, leftCenter + eps),
+            candId: left.id,
+            label: getLabel(left.id)
+        });
 
-        if (true) {
-            // c3 region
-            const center = 1.5 - c3;
-            regions.push({
-                center: center,
-                start: Math.max(0, center - eps),
-                end: Math.min(1, center + eps, c3),
-                type: 'c3'
-            });
-        }
+        // Right candidate region: center at 1.5 - right.pos
+        const rightCenter = 1.5 - right.pos;
+        regions.push({
+            center: rightCenter,
+            start: Math.max(0, rightCenter - eps),
+            end: Math.min(1, rightCenter + eps, right.pos),
+            candId: right.id,
+            label: getLabel(right.id)
+        });
 
-        return { eps, regions };
-    }, [numCandidates, dimensionMode, c1, c3]);
+        return { eps, regions, middleCandidate: middle.id, middleLabel: getLabel(middle.id) };
+    }, [numCandidates, dimensionMode, c1, c2, c3, label1, label2, label3]);
 
     // Convert ranking string to use custom labels (e.g., "C1>C2>C3" → "Alice>Bob>Charlie")
     const formatRanking = (ranking) => {
@@ -1469,18 +1478,14 @@ function VotingAnalysis() {
                         </p>
                         {specialRegions && (
                             <p style={{ fontSize: '11px', color: '#fbbf24', marginBottom: '15px' }}>
-                                ε = {specialRegions.eps.toFixed(3)} (C3 - C1 - 0.5).
-                                {specialRegions.regions.length > 0 && (
-                                    <span>
-                                        Special regions shown in yellow:
-                                        {specialRegions.regions.map((r, i) => (
-                                            <span key={i}>
-                                                {i > 0 ? ', ' : ' '}
-                                                {r.type === 'c1' ? `dist(x, ${(0.5 - c1).toFixed(3)}) ≤ ε` : `dist(x, ${(1.5 - c3).toFixed(3)}) ≤ ε`}
-                                            </span>
-                                        ))}
+                                <strong>Center winning regions</strong> (yellow): Where {specialRegions.middleLabel} can win. 
+                                ε = {specialRegions.eps.toFixed(3)}. 
+                                {specialRegions.regions.map((r, i) => (
+                                    <span key={i}>
+                                        {i > 0 ? '; ' : ''}
+                                        {r.label}: dist(x, {r.center.toFixed(3)}) ≤ ε
                                     </span>
-                                )}
+                                ))}
                             </p>
                         )}
                         <svg ref={svgRef} width="100%" height="160" style={{ display: 'block', cursor: dragging ? 'grabbing' : 'default', touchAction: 'none', backgroundColor: '#0f172a' }}>
@@ -1784,6 +1789,20 @@ function VotingAnalysis() {
                             </span>
                         )}
                     </h3>
+                    {dimensionMode === '1d' && (
+                        <div style={{ fontSize: '11px', color: '#86efac', marginBottom: '8px' }}>
+                            Positions: {Object.entries(candidates).map(([id, pos], idx) => (
+                                <span key={id}>{idx > 0 ? ', ' : ''}{getLabel(id)}={pos.toFixed(3)}</span>
+                            ))}
+                        </div>
+                    )}
+                    {dimensionMode === '2d' && (
+                        <div style={{ fontSize: '11px', color: '#86efac', marginBottom: '8px' }}>
+                            Positions: {Object.entries(candidates).map(([id, pos], idx) => (
+                                <span key={id}>{idx > 0 ? ', ' : ''}{getLabel(id)}=({pos.x.toFixed(2)},{pos.y.toFixed(2)})</span>
+                            ))}
+                        </div>
+                    )}
                     <div style={{ marginBottom: '10px' }}>
                         <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '5px', color: '#86efac' }}>
                             Max Ranks Allowed: {maxRanksAllowed}
