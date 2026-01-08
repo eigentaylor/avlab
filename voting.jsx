@@ -674,7 +674,14 @@ function VotingAnalysis() {
             label: getLabel(right.id)
         });
 
-        return { eps, regions, middleCandidate: middle.id, middleLabel: getLabel(middle.id) };
+        return {
+            eps,
+            regions,
+            middleCandidate: middle.id,
+            middleLabel: getLabel(middle.id),
+            leftLabel: getLabel(left.id),
+            rightLabel: getLabel(right.id)
+        };
     }, [numCandidates, dimensionMode, c1, c2, c3, label1, label2, label3]);
 
     // Convert ranking string to use custom labels (e.g., "C1>C2>C3" → "Alice>Bob>Charlie")
@@ -1189,7 +1196,7 @@ function VotingAnalysis() {
                 // Determine which one the voter prefers
                 const topCandDist = computeDistance(voterPos, candidates[topCandidate]);
                 const secondCandDist = computeDistance(voterPos, candidates[secondCandidate]);
-                
+
                 const preferredTopTwo = topCandDist <= secondCandDist ? topCandidate : secondCandidate;
                 const lessPreferredTopTwo = topCandDist <= secondCandDist ? secondCandidate : topCandidate;
 
@@ -1199,9 +1206,9 @@ function VotingAnalysis() {
                 const currentlyApprovingSecond = secondCandDist <= currentThreshold;
 
                 // Rule 2: If currently approving exactly one of the top two, don't change
-                const approvingExactlyOne = (currentlyApprovingTop && !currentlyApprovingSecond) || 
-                                           (!currentlyApprovingTop && currentlyApprovingSecond);
-                
+                const approvingExactlyOne = (currentlyApprovingTop && !currentlyApprovingSecond) ||
+                    (!currentlyApprovingTop && currentlyApprovingSecond);
+
                 if (approvingExactlyOne) {
                     // Keep current threshold
                     return currentThreshold;
@@ -1210,7 +1217,7 @@ function VotingAnalysis() {
                 // Rule 3: Approve the preferred top candidate and all those preferred to them
                 // Find distance to preferred top candidate
                 const preferredDist = computeDistance(voterPos, candidates[preferredTopTwo]);
-                
+
                 // Set threshold to include preferred candidate and all closer ones
                 // Use epsilon to ensure we include the preferred candidate
                 return preferredDist + epsilon;
@@ -1471,6 +1478,11 @@ function VotingAnalysis() {
                         <p style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '5px' }}>
                             <strong>Drag candidates</strong> to change positions. Indifference points shown in purple.
                         </p>
+                        <p>
+                            Candidate positions: {Object.entries(candidates).map(([key, val], idx) => (
+                                <span key={key} style={{ color: colors[parseInt(key.slice(1)) - 1] }}> {getLabel(key)}={val.toFixed(3)}{idx < Object.entries(candidates).length - 1 ? ', ' : ''}</span>
+                            ))}
+                        </p>
                         <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '15px' }}>
                             Indifference points: {Object.entries(indifferencePoints).map(([key, val], idx) => (
                                 <span key={key}>{idx > 0 ? ', ' : ''}{key.toUpperCase()}={val.toFixed(3)}</span>
@@ -1479,13 +1491,15 @@ function VotingAnalysis() {
                         {specialRegions && (
                             <p style={{ fontSize: '11px', color: '#fbbf24', marginBottom: '15px' }}>
                                 <strong>Center winning regions</strong> (yellow): Where {specialRegions.middleLabel} can win.
-                                ε = {specialRegions.eps.toFixed(3)}.
-                                {specialRegions.regions.map((r, i) => (
-                                    <span key={i}>
-                                        {i > 0 ? '; ' : ''}
-                                        {r.label}: dist(x, {r.center.toFixed(3)}) ≤ ε
-                                    </span>
-                                ))}
+                                ε = ({specialRegions.rightLabel} - {specialRegions.leftLabel} - 0.5) = {specialRegions.eps.toFixed(3)}:
+                                {specialRegions.regions.map((r, i) => {
+                                    const formula = i === 0 ? `0.5-${getLabel(r.candId)}` : `1.5-${getLabel(r.candId)}`;
+                                    return (
+                                        <div key={i} style={{ marginTop: '6px' }}>
+                                            dist({specialRegions.middleLabel},{formula}) = dist({specialRegions.middleLabel}, {r.center.toFixed(3)}) ≤ ε
+                                        </div>
+                                    );
+                                })}
                             </p>
                         )}
                         <svg ref={svgRef} width="100%" height="160" style={{ display: 'block', cursor: dragging ? 'grabbing' : 'default', touchAction: 'none', backgroundColor: '#0f172a' }}>
