@@ -1173,47 +1173,47 @@ function VotingAnalysis() {
             const prevStep = steps[steps.length - 1];
 
             // Each voter adjusts threshold strategically
-            // Viable = within 3% margin of error of first place
             const newThresholds = voters.map((voterPos, voterIdx) => {
+                // Get voter's ranking by distance
                 const allDistances = candNames.map(candName => ({
                     name: candName,
                     distance: computeDistance(voterPos, candidates[candName])
                 }));
                 allDistances.sort((a, b) => a.distance - b.distance);
-                const closest = allDistances[0].name;
-                const closestDist = allDistances[0].distance;
-                const furthest = allDistances[allDistances.length - 1].name;
-                const furthestDist = allDistances[allDistances.length - 1].distance;
 
-                if (prevStep.viableCandidates.length === 1) {
-                    // Only one viable candidate (clear frontrunner)
-                    const frontrunner = prevStep.viableCandidates[0];
-                    const frontrunnerDist = computeDistance(voterPos, candidates[frontrunner]);
+                // Identify top two candidates from the election results
+                const sortedResults = Object.entries(prevStep.approvalCounts).sort((a, b) => b[1] - a[1]);
+                const topCandidate = sortedResults[0][0]; // Candidate A (top in election)
+                const secondCandidate = sortedResults[1][0]; // Candidate B (second in election)
 
-                    if (closest === frontrunner) {
-                        // Case 1: Frontrunner is first choice - bullet vote (approve only frontrunner)
-                        return frontrunnerDist + epsilon;
-                    } else if (frontrunnerDist <= sincereThreshold) {
-                        // Case 2: Frontrunner not first but within sincere threshold
-                        // Approve frontrunner and everyone preferred to them (but not least favorite)
-                        return Math.min(frontrunnerDist + epsilon, furthestDist - epsilon);
-                    } else {
-                        // Case 3: Frontrunner not in sincere threshold
-                        // Approve everyone strictly preferred to frontrunner (but not least favorite)
-                        return Math.min(frontrunnerDist - epsilon, furthestDist - epsilon);
-                    }
-                } else {
-                    // Multiple viable candidates
-                    // Strategy: approve closest viable candidate (but never least favorite)
-                    const viableDistances = prevStep.viableCandidates.map(candName => ({
-                        name: candName,
-                        distance: computeDistance(voterPos, candidates[candName])
-                    }));
-                    viableDistances.sort((a, b) => a.distance - b.distance);
-                    const closestViableDist = viableDistances[0].distance;
+                // Determine which one the voter prefers
+                const topCandDist = computeDistance(voterPos, candidates[topCandidate]);
+                const secondCandDist = computeDistance(voterPos, candidates[secondCandidate]);
+                
+                const preferredTopTwo = topCandDist <= secondCandDist ? topCandidate : secondCandidate;
+                const lessPreferredTopTwo = topCandDist <= secondCandDist ? secondCandidate : topCandidate;
 
-                    return Math.min(closestViableDist + epsilon, furthestDist - epsilon);
+                // Check current approvals with previous threshold
+                const currentThreshold = prevStep.thresholds[voterIdx];
+                const currentlyApprovingTop = topCandDist <= currentThreshold;
+                const currentlyApprovingSecond = secondCandDist <= currentThreshold;
+
+                // Rule 2: If currently approving exactly one of the top two, don't change
+                const approvingExactlyOne = (currentlyApprovingTop && !currentlyApprovingSecond) || 
+                                           (!currentlyApprovingTop && currentlyApprovingSecond);
+                
+                if (approvingExactlyOne) {
+                    // Keep current threshold
+                    return currentThreshold;
                 }
+
+                // Rule 3: Approve the preferred top candidate and all those preferred to them
+                // Find distance to preferred top candidate
+                const preferredDist = computeDistance(voterPos, candidates[preferredTopTwo]);
+                
+                // Set threshold to include preferred candidate and all closer ones
+                // Use epsilon to ensure we include the preferred candidate
+                return preferredDist + epsilon;
             });
 
             // Apply asynchronous updates: only update a fraction of voters
@@ -1478,8 +1478,8 @@ function VotingAnalysis() {
                         </p>
                         {specialRegions && (
                             <p style={{ fontSize: '11px', color: '#fbbf24', marginBottom: '15px' }}>
-                                <strong>Center winning regions</strong> (yellow): Where {specialRegions.middleLabel} can win. 
-                                ε = {specialRegions.eps.toFixed(3)}. 
+                                <strong>Center winning regions</strong> (yellow): Where {specialRegions.middleLabel} can win.
+                                ε = {specialRegions.eps.toFixed(3)}.
                                 {specialRegions.regions.map((r, i) => (
                                     <span key={i}>
                                         {i > 0 ? '; ' : ''}
