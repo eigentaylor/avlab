@@ -367,6 +367,7 @@ function VotingAnalysis() {
     // Calculate voter preferences based on distance
     const voterRankings = useMemo(() => {
         const candNames = Object.keys(candidates);
+        const epsilon = 0.0001; // Threshold for considering candidates at the same position
 
         if (dimensionMode === '1d') {
             const candPositions = Object.values(candidates);
@@ -397,7 +398,24 @@ function VotingAnalysis() {
 
                 dists.sort((a, b) => a.dist - b.dist);
 
-                const ranking = dists.map(d => d.name).join('>');
+                // Group candidates by distance (handle ties)
+                const groups = [];
+                let currentGroup = [dists[0]];
+                for (let j = 1; j < dists.length; j++) {
+                    if (Math.abs(dists[j].dist - dists[j - 1].dist) < epsilon) {
+                        currentGroup.push(dists[j]);
+                    } else {
+                        groups.push(currentGroup);
+                        currentGroup = [dists[j]];
+                    }
+                }
+                groups.push(currentGroup);
+
+                // Create ranking with ties indicated by '=' between tied candidates
+                const ranking = groups.map(group =>
+                    group.map(d => d.name).sort().join('=')
+                ).join('>');
+
                 const proportion = points[i + 1] - points[i];
 
                 // Track the interval for this ranking
@@ -462,7 +480,24 @@ function VotingAnalysis() {
                     }));
 
                     dists.sort((a, b) => a.dist - b.dist);
-                    const ranking = dists.map(d => d.name).join('>');
+
+                    // Group candidates by distance (handle ties)
+                    const groups = [];
+                    let currentGroup = [dists[0]];
+                    for (let j = 1; j < dists.length; j++) {
+                        if (Math.abs(dists[j].dist - dists[j - 1].dist) < epsilon) {
+                            currentGroup.push(dists[j]);
+                        } else {
+                            groups.push(currentGroup);
+                            currentGroup = [dists[j]];
+                        }
+                    }
+                    groups.push(currentGroup);
+
+                    // Create ranking with ties indicated by '=' between tied candidates
+                    const ranking = groups.map(group =>
+                        group.map(d => d.name).sort().join('=')
+                    ).join('>');
 
                     if (rankingCounts[ranking]) {
                         rankingCounts[ranking]++;
@@ -520,6 +555,35 @@ function VotingAnalysis() {
         }
     }, [candidates, indifferencePoints, dimensionMode]);
 
+    // Helper function to parse rankings with ties
+    // Returns array of groups where each group is an array of tied candidates
+    // e.g., "C1=C2>C3" => [["C1", "C2"], ["C3"]]
+    const parseRankingWithTies = (ranking) => {
+        if (!ranking) return [];
+        return ranking.split('>').map(group => group.split('='));
+    };
+
+    // Helper function to get the first choice(s) from a ranking, accounting for ties
+    // Returns an array of candidates tied for first
+    const getFirstChoices = (ranking, remaining = null) => {
+        const groups = parseRankingWithTies(ranking);
+        if (groups.length === 0) return [];
+
+        // If remaining is specified, find the first group with at least one remaining candidate
+        if (remaining) {
+            for (const group of groups) {
+                const validCandidates = group.filter(c => c !== '' && remaining.includes(c));
+                if (validCandidates.length > 0) {
+                    return validCandidates;
+                }
+            }
+            return [];
+        }
+
+        // Otherwise return the first group
+        return groups[0].filter(c => c !== '');
+    };
+
     // Pairwise comparisons
     const pairwise = useMemo(() => {
         const results = {};
@@ -532,10 +596,22 @@ function VotingAnalysis() {
                 let c1Votes = 0;
 
                 voterRankings.forEach(v => {
-                    const ranks = v.ranking.split('>');
-                    if (ranks.indexOf(c1) < ranks.indexOf(c2)) {
-                        c1Votes += v.proportion;
+                    const groups = parseRankingWithTies(v.ranking);
+
+                    // Find which group c1 and c2 are in
+                    let c1Group = -1, c2Group = -1;
+                    for (let g = 0; g < groups.length; g++) {
+                        if (groups[g].includes(c1)) c1Group = g;
+                        if (groups[g].includes(c2)) c2Group = g;
                     }
+
+                    // Only count vote if they're in different groups
+                    if (c1Group !== c2Group) {
+                        if (c1Group < c2Group) {
+                            c1Votes += v.proportion;
+                        }
+                    }
+                    // If they're in the same group (tied), neither gets a vote
                 });
 
                 results[c1 + ' vs ' + c2] = {
@@ -613,9 +689,22 @@ function VotingAnalysis() {
         names.forEach(name => scores[name] = 0);
 
         voterRankings.forEach(v => {
-            const ranks = v.ranking.split('>');
-            ranks.forEach((cand, idx) => {
-                scores[cand] += (idx + 1) * v.proportion;  // 1 pt for 1st, 2 pts for 2nd, 3 pts for 3rd
+            const groups = parseRankingWithTies(v.ranking);
+            let currentRank = 1;
+
+            groups.forEach(group => {
+                // For tied candidates, give them the average score
+                // e.g., if 2 candidates tied for 1st, they each get (1+2)/2 = 1.5 points
+                const groupSize = group.filter(c => c !== '').length;
+                const avgScore = (currentRank + currentRank + groupSize - 1) / 2;
+
+                group.forEach(cand => {
+                    if (cand !== '') {
+                        scores[cand] += avgScore * v.proportion;
+                    }
+                });
+
+                currentRank += groupSize;
             });
         });
 
@@ -686,12 +775,16 @@ function VotingAnalysis() {
 
     // Convert ranking string to use custom labels (e.g., "C1>C2>C3" → "Alice>Bob>Charlie")
     const formatRanking = (ranking) => {
-        return ranking.split('>').map(c => getLabel(c)).join('>');
+        return ranking.split('>').map(group =>
+            group.split('=').map(c => getLabel(c)).join('=')
+        ).join('>');
     };
 
     // Convert ranking to use first letter only (for compact display in regions)
     const formatRankingCompact = (ranking) => {
-        return ranking.split('>').map(c => getLabel(c).charAt(0)).join('>');
+        return ranking.split('>').map(group =>
+            group.split('=').map(c => getLabel(c).charAt(0)).join('=')
+        ).join('>');
     };
 
     // RCV rounds with reverse Borda tiebreaker and ballot exhaustion
@@ -703,8 +796,8 @@ function VotingAnalysis() {
 
         // Apply max ranks limit to initial voter rankings
         voters = voters.map(v => {
-            const rankedCandidates = v.ranking.split('>');
-            const limitedRanking = rankedCandidates.slice(0, maxRanksAllowed).join('>');
+            const groups = parseRankingWithTies(v.ranking);
+            const limitedRanking = groups.slice(0, maxRanksAllowed).map(g => g.join('=')).join('>');
             return { ranking: limitedRanking, proportion: v.proportion };
         });
 
@@ -714,9 +807,13 @@ function VotingAnalysis() {
             let newExhausted = 0;
 
             voters.forEach(v => {
-                const first = v.ranking.split('>').filter(c => c !== '').find(c => remaining.includes(c));
-                if (first) {
-                    votes[first] += v.proportion;
+                const firstChoices = getFirstChoices(v.ranking, remaining);
+                if (firstChoices.length > 0) {
+                    // Split vote evenly among tied first choices
+                    const voteShare = v.proportion / firstChoices.length;
+                    firstChoices.forEach(choice => {
+                        votes[choice] += voteShare;
+                    });
                 } else {
                     // Ballot is exhausted (no remaining candidates in their ranking)
                     newExhausted += v.proportion;
@@ -759,10 +856,15 @@ function VotingAnalysis() {
             rounds.push({ votes: round, eliminated, exhausted });
 
             remaining = remaining.filter(c => c !== eliminated);
-            voters = voters.map(v => ({
-                ranking: v.ranking.split('>').filter(c => c !== eliminated).join('>'),
-                proportion: v.proportion
-            }));
+            voters = voters.map(v => {
+                // Remove eliminated candidate from all tie groups
+                const groups = parseRankingWithTies(v.ranking);
+                const filteredGroups = groups.map(g => g.filter(c => c !== eliminated)).filter(g => g.length > 0);
+                return {
+                    ranking: filteredGroups.map(g => g.join('=')).join('>'),
+                    proportion: v.proportion
+                };
+            });
         }
 
         return rounds;
@@ -778,16 +880,35 @@ function VotingAnalysis() {
             names.forEach(name => approvals[name] = 0);
 
             voterRankings.forEach(v => {
-                const ranks = v.ranking.split('>');
-                const idx = ranks.indexOf(target);
+                const groups = parseRankingWithTies(v.ranking);
 
-                if (idx === ranks.length - 1) {
-                    // Target is last, approve only top choice
-                    approvals[ranks[0]] += v.proportion;
+                // Find which group the target is in
+                let targetGroupIdx = -1;
+                for (let i = 0; i < groups.length; i++) {
+                    if (groups[i].includes(target)) {
+                        targetGroupIdx = i;
+                        break;
+                    }
+                }
+
+                if (targetGroupIdx === -1) return; // target not in ranking
+
+                if (targetGroupIdx === groups.length - 1) {
+                    // Target is in the last group, approve only candidates in the first group
+                    // Split vote equally among first-place candidates
+                    const firstGroup = groups[0].filter(c => c !== '');
+                    const voteShare = v.proportion / firstGroup.length;
+                    firstGroup.forEach(c => {
+                        approvals[c] += voteShare;
+                    });
                 } else {
-                    // Approve target and everyone above
-                    for (let i = 0; i <= idx; i++) {
-                        approvals[ranks[i]] += v.proportion;
+                    // Approve target and everyone in groups at or above target
+                    for (let i = 0; i <= targetGroupIdx; i++) {
+                        groups[i].forEach(c => {
+                            if (c !== '') {
+                                approvals[c] += v.proportion;
+                            }
+                        });
                     }
                 }
             });
@@ -852,14 +973,18 @@ function VotingAnalysis() {
 
             // For each simulation, assign each voter bloc a probability of approving candidates
             voterRankings.forEach(v => {
-                const ranks = v.ranking.split('>');
+                const groups = parseRankingWithTies(v.ranking);
 
-                // Always approve top choice (rank 0)
-                approvals[ranks[0]] += v.proportion;
+                // Always approve top choice(s) - split equally among tied candidates
+                const firstGroup = groups[0].filter(c => c !== '');
+                const firstShare = v.proportion / firstGroup.length;
+                firstGroup.forEach(c => {
+                    approvals[c] += firstShare;
+                });
 
-                // For ranks 1 through second-to-last, draw probabilities
-                // Never approve the last-ranked candidate
-                for (let i = 1; i < ranks.length - 1; i++) {
+                // For groups 1 through second-to-last, draw probabilities
+                // Never approve the last-ranked group
+                for (let i = 1; i < groups.length - 1; i++) {
                     let prob;
                     if (distributionType === 'uniform') {
                         prob = Math.random(); // uniform [0,1]
@@ -871,8 +996,12 @@ function VotingAnalysis() {
                         prob = Math.max(0, Math.min(1, 0.5 + 0.2 * z));
                     }
 
-                    // Apply this probability to the entire bloc
-                    approvals[ranks[i]] += v.proportion * prob;
+                    // Apply this probability to all candidates in this group
+                    groups[i].forEach(c => {
+                        if (c !== '') {
+                            approvals[c] += v.proportion * prob;
+                        }
+                    });
                 }
             });
 
@@ -1132,7 +1261,7 @@ function VotingAnalysis() {
                 // Create ballot key ordered by voter's preference (distances already sorted)
                 const ballotKey = approvedCandidates.join(',');
                 voterBallots.push(ballotKey);
-                
+
                 if (ballotKey) { // Only count non-empty ballots
                     ballotCounts[ballotKey] = (ballotCounts[ballotKey] || 0) + 1;
                 }
@@ -1244,7 +1373,7 @@ function VotingAnalysis() {
                 // Check what this voter is currently approving (accounting for basic strategy)
                 const currentThreshold = prevStep.thresholds[voterIdx];
                 const currentApprovals = getCurrentApprovals(voterPos, currentThreshold);
-                
+
                 const currentlyApprovingTop = currentApprovals.has(topCandidate);
                 const currentlyApprovingSecond = currentApprovals.has(secondCandidate);
 
@@ -1289,15 +1418,15 @@ function VotingAnalysis() {
             });
 
             const currentStep = computeStep(updatedThresholds);
-            
+
             // Compute ballot transitions from previous step
             const transitions = {};
             let votersUnchanged = 0;
-            
+
             voters.forEach((voterPos, voterIdx) => {
                 const prevBallot = prevStep.voterBallots[voterIdx];
                 const currBallot = currentStep.voterBallots[voterIdx];
-                
+
                 if (prevBallot === currBallot) {
                     votersUnchanged++;
                 } else {
@@ -1305,7 +1434,7 @@ function VotingAnalysis() {
                     transitions[transitionKey] = (transitions[transitionKey] || 0) + 1;
                 }
             });
-            
+
             steps.push({
                 stepNumber: stepNum,
                 ...currentStep,
@@ -2675,7 +2804,7 @@ function VotingAnalysis() {
                                 <h5 style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '10px', color: '#c4b5fd' }}>
                                     Ballot Changes from Step {currentStep - 1} to Step {currentStep}
                                 </h5>
-                                
+
                                 <div style={{ marginBottom: '12px', padding: '8px', backgroundColor: '#312e81', borderRadius: '4px', fontSize: '11px' }}>
                                     <div style={{ color: '#a78bfa', marginBottom: '4px', fontWeight: 'bold' }}>
                                         Frontrunners at Step {currentStep - 1}:
@@ -2684,11 +2813,11 @@ function VotingAnalysis() {
                                         {turnBasedResults[currentStep - 1].frontrunners && turnBasedResults[currentStep - 1].frontrunners.length >= 2
                                             ? `${getLabel(turnBasedResults[currentStep - 1].frontrunners[0])} vs ${getLabel(turnBasedResults[currentStep - 1].frontrunners[1])}`
                                             : turnBasedResults[currentStep - 1].frontrunners && turnBasedResults[currentStep - 1].frontrunners.length === 1
-                                            ? `${getLabel(turnBasedResults[currentStep - 1].frontrunners[0])}`
-                                            : 'Unknown'}
+                                                ? `${getLabel(turnBasedResults[currentStep - 1].frontrunners[0])}`
+                                                : 'Unknown'}
                                     </div>
                                 </div>
-                                
+
                                 <div style={{ marginBottom: '12px', fontSize: '12px', color: '#e9d5ff' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', backgroundColor: '#312e81', borderRadius: '4px' }}>
                                         <span style={{ fontWeight: 'bold' }}>Voters Unchanged:</span>
@@ -2708,7 +2837,7 @@ function VotingAnalysis() {
                                                     const fromLabels = from === '∅' ? '∅' : from.split(',').map(c => getLabel(c)).join(', ');
                                                     const toLabels = to === '∅' ? '∅' : to.split(',').map(c => getLabel(c)).join(', ');
                                                     const percentage = (count / numVoters) * 100;
-                                                    
+
                                                     return (
                                                         <div key={transition} style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
                                                             <span style={{ fontFamily: 'monospace', color: '#e9d5ff', fontSize: '11px' }}>
