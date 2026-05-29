@@ -63,6 +63,7 @@ function VotingAnalysis() {
 
             const st = params.has('st') ? parseFloat(params.get('st')) : null;
             const bs = params.has('bs') ? (params.get('bs') === '1' || params.get('bs') === 'true') : null;
+            const strat = params.get('strat'); // Strategy type: 'threshold', 'basic', 'leaderRule'
 
             // Max ranks allowed for RCV
             const mr = params.has('mr') ? parseInt(params.get('mr')) : null;
@@ -111,6 +112,15 @@ function VotingAnalysis() {
                 }
                 if (bs !== null) {
                     setUseBasicStrategy(Boolean(bs));
+                }
+                // Strategy type - map 'basic' to 'threshold' + useBasicStrategy for backwards compatibility
+                if (strat !== null) {
+                    if (strat === 'basic') {
+                        setStrategyType('threshold');
+                        setUseBasicStrategy(true);
+                    } else if (['threshold', 'leaderRule'].includes(strat)) {
+                        setStrategyType(strat);
+                    }
                 }
 
                 // Async update rate
@@ -192,6 +202,7 @@ function VotingAnalysis() {
 
             params.set('st', sincereThreshold.toFixed(3));
             params.set('bs', useBasicStrategy ? '1' : '0');
+            params.set('strat', strategyType);
             params.set('au', asyncUpdateRate.toFixed(1));
             params.set('sv', sincereVoterProportion.toFixed(1));
             params.set('mr', maxRanksAllowed.toString());
@@ -203,7 +214,7 @@ function VotingAnalysis() {
         } catch (err) {
             console.warn('Error updating URL params', err);
         }
-    }, [numCandidates, dimensionMode, c1, c2, c3, c4, c1_2d, c2_2d, c3_2d, c4_2d, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, asyncUpdateRate, sincereVoterProportion, maxRanksAllowed]);
+    }, [numCandidates, dimensionMode, c1, c2, c3, c4, c1_2d, c2_2d, c3_2d, c4_2d, label1, label2, label3, label4, sincereThreshold, useBasicStrategy, strategyType, asyncUpdateRate, sincereVoterProportion, maxRanksAllowed]);
 
     const handlePointerDown = (point) => (e) => {
         e.preventDefault();
@@ -954,6 +965,8 @@ function VotingAnalysis() {
     const [sincereThreshold, setSincereThreshold] = useState(0.15);
     const [numVoters, setNumVoters] = useState(10000);
     const [useBasicStrategy, setUseBasicStrategy] = useState(false);
+    // Strategy type: 'threshold' (approval polls assumption), 'basic' (always approve closest, never furthest), 'leaderRule'
+    const [strategyType, setStrategyType] = useState('threshold');
     const sincereMCSimulations = 100;
     const [sincereMCResults, setSincereMCResults] = useState(null);
 
@@ -961,8 +974,10 @@ function VotingAnalysis() {
     const [turnBasedResults, setTurnBasedResults] = useState(null);
     const [currentStep, setCurrentStep] = useState(0);
     const [voterSeed, setVoterSeed] = useState(0); // For redistributing voters
-    const [asyncUpdateRate, setAsyncUpdateRate] = useState(0.4); // Fraction of voters that update per step
+    const [asyncUpdateRate, setAsyncUpdateRate] = useState(1.0); // Fraction of voters that update per step
     const [sincereVoterProportion, setSincereVoterProportion] = useState(0.0); // Proportion of voters who never change strategy
+    const [showInitialApprovals, setShowInitialApprovals] = useState(true); // Show initial vs final approvals for leader rule
+    const showInitialFinalToggle = false; // Flag to control visibility of initial/final toggle checkbox
 
     // Monte Carlo simulation for approval voting
     const monteCarloResults = useMemo(() => {
@@ -1041,6 +1056,65 @@ function VotingAnalysis() {
             }
         }
 
+        // Helper to compute distance
+        const computeDistance = (voterPos, candPos) => {
+            if (dimensionMode === '1d') {
+                return Math.abs(voterPos - candPos);
+            } else {
+                return Math.sqrt((voterPos.x - candPos.x) ** 2 + (voterPos.y - candPos.y) ** 2);
+            }
+        };
+
+        // For leaderRule strategy, we need initial poll results first
+        // Use threshold-based voting for the initial poll
+        let initialPollResults = null;
+
+        // Always store initial approval counts (sincere threshold voting)
+        const initialApprovalCounts = {};
+        candNames.forEach(name => initialApprovalCounts[name] = 0);
+
+        const initialVotesPerVoter = []; // Track initial votes cast per voter
+
+        voters.forEach(voterPos => {
+            const distances = candNames.map(name => ({
+                name,
+                distance: computeDistance(voterPos, candidates[name])
+            }));
+            
+            let initialApprovedCount = 0;
+            
+            // Use basic strategy if enabled for initial poll
+            if (useBasicStrategy) {
+                distances.sort((a, b) => a.distance - b.distance);
+                initialApprovalCounts[distances[0].name]++;
+                initialApprovedCount++;
+                for (let i = 1; i < distances.length - 1; i++) {
+                    if (distances[i].distance <= sincereThreshold) {
+                        initialApprovalCounts[distances[i].name]++;
+                        initialApprovedCount++;
+                    }
+                }
+            } else {
+                distances.forEach(d => {
+                    if (d.distance <= sincereThreshold) {
+                        initialApprovalCounts[d.name]++;
+                        initialApprovedCount++;
+                    }
+                });
+            }
+            
+            initialVotesPerVoter.push(initialApprovedCount);
+        });
+
+        // For leaderRule, identify leader and challenger from initial counts
+        if (strategyType === 'leaderRule') {
+            const sorted = Object.entries(initialApprovalCounts).sort((a, b) => b[1] - a[1]);
+            initialPollResults = {
+                leader: sorted[0][0],
+                challenger: sorted[1][0]
+            };
+        }
+
         // Calculate approval votes for each voter
         const approvalCounts = {};
         candNames.forEach(name => approvalCounts[name] = 0);
@@ -1049,24 +1123,54 @@ function VotingAnalysis() {
 
         voters.forEach(voterPos => {
             // Calculate distances to all candidates
-            const distances = candNames.map(name => {
-                const candPos = candidates[name];
-                let dist;
-                if (dimensionMode === '1d') {
-                    dist = Math.abs(voterPos - candPos);
-                } else {
-                    dist = Math.sqrt((voterPos.x - candPos.x) ** 2 + (voterPos.y - candPos.y) ** 2);
-                }
-                return { name, distance: dist };
-            });
+            const distances = candNames.map(name => ({
+                name,
+                distance: computeDistance(voterPos, candidates[name])
+            }));
 
-            // Sort by distance
+            // Sort by distance (closest first = most preferred)
             distances.sort((a, b) => a.distance - b.distance);
 
             let approvedCount = 0;
 
-            if (useBasicStrategy) {
-                // Always approve closest, never approve furthest
+            // Determine which candidates to approve based on strategy
+            if (strategyType === 'leaderRule' && initialPollResults) {
+                // Leader Rule Strategy:
+                // 1. Identify the current leader (x1) and challenger (x2)
+                // 2. Approve everyone preferred STRICTLY to x1
+                // 3. If voter prefers x1 > x2, also approve x1
+                //    If voter prefers x2 > x1, do NOT approve x1
+
+                const { leader, challenger } = initialPollResults;
+                const leaderDist = computeDistance(voterPos, candidates[leader]);
+                const challengerDist = computeDistance(voterPos, candidates[challenger]);
+                const prefersLeader = leaderDist < challengerDist;
+
+                // Basic strategy: always approve closest
+                if (useBasicStrategy) {
+                    approvalCounts[distances[0].name]++;
+                    approvedCount++;
+                }
+
+                // Approve all candidates preferred strictly to the leader
+                distances.forEach(d => {
+                    // Skip if already approved (closest with basic strategy)
+                    if (useBasicStrategy && d.name === distances[0].name) return;
+                    // Never approve furthest if basic strategy
+                    if (useBasicStrategy && d.name === distances[distances.length - 1].name) return;
+
+                    if (d.distance < leaderDist) {
+                        // Strictly preferred to leader
+                        approvalCounts[d.name]++;
+                        approvedCount++;
+                    } else if (d.name === leader && prefersLeader) {
+                        // Approve leader only if voter prefers leader to challenger
+                        approvalCounts[d.name]++;
+                        approvedCount++;
+                    }
+                });
+            } else if (useBasicStrategy) {
+                // Basic strategy: Always approve closest, never approve furthest
                 approvalCounts[distances[0].name]++;
                 approvedCount++;
 
@@ -1078,7 +1182,7 @@ function VotingAnalysis() {
                     }
                 }
             } else {
-                // Approve all candidates within threshold (could be 0 or all)
+                // Default: Approve all candidates within threshold (could be 0 or all)
                 distances.forEach(d => {
                     if (d.distance <= sincereThreshold) {
                         approvalCounts[d.name]++;
@@ -1104,15 +1208,27 @@ function VotingAnalysis() {
             votesDistribution[count]++;
         });
 
+        // Count initial distribution of votes per voter
+        const initialVotesDistribution = {};
+        for (let i = 0; i <= candNames.length; i++) {
+            initialVotesDistribution[i] = 0;
+        }
+        initialVotesPerVoter.forEach(count => {
+            initialVotesDistribution[count]++;
+        });
+
         return {
             approvalCounts,
             winner,
             maxVotes,
             votesDistribution,
             totalVoters: numVoters,
-            voters // Return voters array for turn-based simulation
+            voters, // Return voters array for turn-based simulation
+            initialPollResults, // Return initial poll results for reference
+            initialApprovalCounts, // Return initial approval counts for leader rule
+            initialVotesDistribution // Return initial votes distribution
         };
-    }, [candidates, dimensionMode, sincereThreshold, numVoters, useBasicStrategy, voterSeed]);
+    }, [candidates, dimensionMode, sincereThreshold, numVoters, useBasicStrategy, strategyType, voterSeed]);
 
     // Run Monte Carlo simulation for sincere threshold
     const runSincereMonteCarlo = () => {
@@ -1131,27 +1247,73 @@ function VotingAnalysis() {
                 }
             }
 
+            // Helper to compute distance
+            const computeDistance = (voterPos, candPos) => {
+                if (dimensionMode === '1d') {
+                    return Math.abs(voterPos - candPos);
+                } else {
+                    return Math.sqrt((voterPos.x - candPos.x) ** 2 + (voterPos.y - candPos.y) ** 2);
+                }
+            };
+
+            // For leaderRule, compute initial poll results first
+            let initialPollResults = null;
+            if (strategyType === 'leaderRule') {
+                const initialCounts = {};
+                candNames.forEach(name => initialCounts[name] = 0);
+
+                voters.forEach(voterPos => {
+                    const distances = candNames.map(name => ({
+                        name,
+                        distance: computeDistance(voterPos, candidates[name])
+                    }));
+                    distances.forEach(d => {
+                        if (d.distance <= sincereThreshold) {
+                            initialCounts[d.name]++;
+                        }
+                    });
+                });
+
+                const sorted = Object.entries(initialCounts).sort((a, b) => b[1] - a[1]);
+                initialPollResults = { leader: sorted[0][0], challenger: sorted[1][0] };
+            }
+
             // Calculate approval votes for each voter
             const approvalCounts = {};
             candNames.forEach(name => approvalCounts[name] = 0);
 
             voters.forEach(voterPos => {
                 // Calculate distances to all candidates
-                const distances = candNames.map(name => {
-                    const candPos = candidates[name];
-                    let dist;
-                    if (dimensionMode === '1d') {
-                        dist = Math.abs(voterPos - candPos);
-                    } else {
-                        dist = Math.sqrt((voterPos.x - candPos.x) ** 2 + (voterPos.y - candPos.y) ** 2);
-                    }
-                    return { name, distance: dist };
-                });
+                const distances = candNames.map(name => ({
+                    name,
+                    distance: computeDistance(voterPos, candidates[name])
+                }));
 
                 // Sort by distance
                 distances.sort((a, b) => a.distance - b.distance);
 
-                if (useBasicStrategy) {
+                if (strategyType === 'leaderRule' && initialPollResults) {
+                    // Leader Rule Strategy
+                    const { leader, challenger } = initialPollResults;
+                    const leaderDist = computeDistance(voterPos, candidates[leader]);
+                    const challengerDist = computeDistance(voterPos, candidates[challenger]);
+                    const prefersLeader = leaderDist < challengerDist;
+
+                    // Basic strategy: always approve closest
+                    if (useBasicStrategy) {
+                        approvalCounts[distances[0].name]++;
+                    }
+
+                    distances.forEach(d => {
+                        if (useBasicStrategy && d.name === distances[0].name) return;
+                        if (useBasicStrategy && d.name === distances[distances.length - 1].name) return;
+                        if (d.distance < leaderDist) {
+                            approvalCounts[d.name]++;
+                        } else if (d.name === leader && prefersLeader) {
+                            approvalCounts[d.name]++;
+                        }
+                    });
+                } else if (useBasicStrategy) {
                     // Always approve closest, never approve furthest
                     approvalCounts[distances[0].name]++;
 
@@ -1162,7 +1324,7 @@ function VotingAnalysis() {
                         }
                     }
                 } else {
-                    // Approve all candidates within threshold
+                    // Default: Approve all candidates within threshold
                     distances.forEach(d => {
                         if (d.distance <= sincereThreshold) {
                             approvalCounts[d.name]++;
@@ -1209,7 +1371,16 @@ function VotingAnalysis() {
         // Step 0: Initial sincere voting with current threshold
         let currentThresholds = voters.map(() => sincereThreshold);
 
-        const computeStep = (thresholds) => {
+        // For leaderRule, we track the frontrunners each voter is responding to
+        // This allows async updates where some voters update to new polls and some don't
+        let voterFrontrunners = voters.map(() => null); // null = sincere voting (step 0)
+
+        // Global frontrunners for reference
+        let currentFrontrunners = null;
+
+        // computeStep can accept either a single frontrunners object (all voters use same)
+        // or an array of frontrunners per voter (for async leader rule updates)
+        const computeStep = (thresholds, frontrunners = null, perVoterFrontrunners = null) => {
             const approvalCounts = {};
             candNames.forEach(name => approvalCounts[name] = 0);
 
@@ -1219,6 +1390,8 @@ function VotingAnalysis() {
 
             voters.forEach((voterPos, voterIdx) => {
                 const voterThreshold = thresholds[voterIdx];
+                // Use per-voter frontrunners if provided, otherwise use global frontrunners
+                const voterFR = perVoterFrontrunners ? perVoterFrontrunners[voterIdx] : frontrunners;
 
                 // Calculate distances to all candidates
                 const distances = candNames.map(name => ({
@@ -1231,8 +1404,50 @@ function VotingAnalysis() {
                 let approvedCount = 0;
                 const approvedCandidates = [];
 
-                if (useBasicStrategy) {
-                    // Always approve closest, never approve furthest
+                // Determine which candidates to approve based on strategy
+                if (strategyType === 'leaderRule' && voterFR) {
+                    // Leader Rule Strategy:
+                    // 1. Identify the current leader (x1) and challenger (x2) from frontrunners
+                    // 2. Approve everyone preferred STRICTLY to x1
+                    // 3. If voter prefers x1 > x2, also approve x1
+                    //    If voter prefers x2 > x1, do NOT approve x1
+
+                    const { leader, challenger } = voterFR;
+                    const leaderDist = computeDistance(voterPos, candidates[leader]);
+                    const challengerDist = computeDistance(voterPos, candidates[challenger]);
+                    const prefersLeader = leaderDist < challengerDist;
+
+                    // Basic strategy: always approve closest
+                    if (useBasicStrategy) {
+                        approvalCounts[distances[0].name]++;
+                        approvedCandidates.push(distances[0].name);
+                        approvedCount++;
+                    }
+
+                    // Approve all candidates preferred strictly to the leader (unless already approved)
+                    distances.forEach(d => {
+                        if (useBasicStrategy && d.name === distances[0].name) {
+                            // Already approved above
+                            return;
+                        }
+                        // Never approve furthest if basic strategy
+                        if (useBasicStrategy && d.name === distances[distances.length - 1].name) {
+                            return;
+                        }
+                        if (d.distance < leaderDist) {
+                            // Strictly preferred to leader
+                            approvalCounts[d.name]++;
+                            approvedCandidates.push(d.name);
+                            approvedCount++;
+                        } else if (d.name === leader && prefersLeader) {
+                            // Approve leader only if voter prefers leader to challenger
+                            approvalCounts[d.name]++;
+                            approvedCandidates.push(d.name);
+                            approvedCount++;
+                        }
+                    });
+                } else if (useBasicStrategy) {
+                    // Basic strategy: Always approve closest, never approve furthest
                     approvalCounts[distances[0].name]++;
                     approvedCandidates.push(distances[0].name);
                     approvedCount++;
@@ -1246,7 +1461,7 @@ function VotingAnalysis() {
                         }
                     }
                 } else {
-                    // Approve all candidates within threshold
+                    // Default (threshold / polls assumption): Approve all candidates within threshold
                     distances.forEach(d => {
                         if (d.distance <= voterThreshold) {
                             approvalCounts[d.name]++;
@@ -1289,8 +1504,9 @@ function VotingAnalysis() {
             // Calculate mean ballot size
             const meanBallotSize = votesPerVoter.reduce((sum, v) => sum + v, 0) / voters.length;
 
-            // Track top 2 frontrunners
-            const frontrunners = sorted.slice(0, 2).map(([cand]) => cand);
+            // Track top 2 frontrunners (as object for leaderRule)
+            const frontrunnersArr = sorted.slice(0, 2).map(([cand]) => cand);
+            const frontrunnersObj = { leader: frontrunnersArr[0], challenger: frontrunnersArr[1] };
 
             return {
                 approvalCounts,
@@ -1300,20 +1516,64 @@ function VotingAnalysis() {
                 meanBallotSize,
                 ballotCounts,
                 voterBallots,
-                frontrunners
+                frontrunners: frontrunnersArr,
+                frontrunnersObj
             };
         };
 
-        // Compute initial step
-        const step0 = computeStep(currentThresholds);
+        // For leaderRule, first compute initial sincere votes to get frontrunners
+        // This is used for step 1 onwards, not step 0
+        let initialFrontrunners = null;
+        if (strategyType === 'leaderRule') {
+            // Compute initial sincere threshold results to get frontrunners
+            const initialCounts = {};
+            candNames.forEach(name => initialCounts[name] = 0);
+
+            voters.forEach(voterPos => {
+                const distances = candNames.map(name => ({
+                    name,
+                    distance: computeDistance(voterPos, candidates[name])
+                }));
+                // For initial poll, use basic strategy if enabled, otherwise pure threshold
+                if (useBasicStrategy) {
+                    distances.sort((a, b) => a.distance - b.distance);
+                    initialCounts[distances[0].name]++;
+                    for (let i = 1; i < distances.length - 1; i++) {
+                        if (distances[i].distance <= sincereThreshold) {
+                            initialCounts[distances[i].name]++;
+                        }
+                    }
+                } else {
+                    distances.forEach(d => {
+                        if (d.distance <= sincereThreshold) {
+                            initialCounts[d.name]++;
+                        }
+                    });
+                }
+            });
+
+            const sorted = Object.entries(initialCounts).sort((a, b) => b[1] - a[1]);
+            initialFrontrunners = { leader: sorted[0][0], challenger: sorted[1][0] };
+        }
+
+        // Compute initial step (step 0) - this is SINCERE voting for all strategies
+        // For leaderRule, we don't pass frontrunners so it falls through to threshold-based voting
+        const step0 = computeStep(currentThresholds, null, voterFrontrunners);
         steps.push({
             stepNumber: 0,
             ...step0,
-            thresholds: [...currentThresholds]
+            thresholds: [...currentThresholds],
+            voterFrontrunners: [...voterFrontrunners]
         });
 
+        // Set up frontrunners for step 1 based on step 0 results
+        if (strategyType === 'leaderRule') {
+            // Use step 0's results as the "poll" that voters see
+            currentFrontrunners = step0.frontrunnersObj;
+        }
+
         // Helper to determine what candidates a voter is currently approving
-        const getCurrentApprovals = (voterPos, threshold) => {
+        const getCurrentApprovals = (voterPos, threshold, frontrunners = null) => {
             const distances = candNames.map(name => ({
                 name,
                 distance: computeDistance(voterPos, candidates[name])
@@ -1322,7 +1582,28 @@ function VotingAnalysis() {
 
             const approved = new Set();
 
-            if (useBasicStrategy) {
+            if (strategyType === 'leaderRule' && frontrunners) {
+                // Leader Rule Strategy
+                const { leader, challenger } = frontrunners;
+                const leaderDist = computeDistance(voterPos, candidates[leader]);
+                const challengerDist = computeDistance(voterPos, candidates[challenger]);
+                const prefersLeader = leaderDist < challengerDist;
+
+                // Basic strategy: always approve closest
+                if (useBasicStrategy) {
+                    approved.add(distances[0].name);
+                }
+
+                distances.forEach(d => {
+                    if (useBasicStrategy && d.name === distances[0].name) return;
+                    if (useBasicStrategy && d.name === distances[distances.length - 1].name) return;
+                    if (d.distance < leaderDist) {
+                        approved.add(d.name);
+                    } else if (d.name === leader && prefersLeader) {
+                        approved.add(d.name);
+                    }
+                });
+            } else if (useBasicStrategy) {
                 // Always approve closest
                 approved.add(distances[0].name);
 
@@ -1349,51 +1630,63 @@ function VotingAnalysis() {
         for (let stepNum = 1; stepNum <= maxSteps; stepNum++) {
             const prevStep = steps[steps.length - 1];
 
-            // Each voter adjusts threshold strategically
-            const newThresholds = voters.map((voterPos, voterIdx) => {
-                // Get voter's ranking by distance
-                const allDistances = candNames.map(candName => ({
-                    name: candName,
-                    distance: computeDistance(voterPos, candidates[candName])
-                }));
-                allDistances.sort((a, b) => a.distance - b.distance);
+            // Each voter adjusts strategy based on the selected strategyType
+            let newThresholds;
+            let newFrontrunners = currentFrontrunners;
 
-                // Identify top two candidates from the election results
-                const sortedResults = Object.entries(prevStep.approvalCounts).sort((a, b) => b[1] - a[1]);
-                const topCandidate = sortedResults[0][0]; // Candidate A (top in election)
-                const secondCandidate = sortedResults[1][0]; // Candidate B (second in election)
+            if (strategyType === 'leaderRule') {
+                // For leaderRule, voters respond to the current frontrunners from the previous step
+                // Update frontrunners based on previous results - this is what voters "see" in the polls
+                newFrontrunners = prevStep.frontrunnersObj;
+                // Thresholds are still used for basic strategy constraint on middle candidates
+                // But for async updates, we need to track which frontrunners each voter is responding to
+                newThresholds = voters.map(() => sincereThreshold);
+            } else {
+                // Default: Approval Polls Assumption strategy
+                newThresholds = voters.map((voterPos, voterIdx) => {
+                    // Get voter's ranking by distance
+                    const allDistances = candNames.map(candName => ({
+                        name: candName,
+                        distance: computeDistance(voterPos, candidates[candName])
+                    }));
+                    allDistances.sort((a, b) => a.distance - b.distance);
 
-                // Determine which one the voter prefers
-                const topCandDist = computeDistance(voterPos, candidates[topCandidate]);
-                const secondCandDist = computeDistance(voterPos, candidates[secondCandidate]);
+                    // Identify top two candidates from the election results
+                    const sortedResults = Object.entries(prevStep.approvalCounts).sort((a, b) => b[1] - a[1]);
+                    const topCandidate = sortedResults[0][0]; // Candidate A (top in election)
+                    const secondCandidate = sortedResults[1][0]; // Candidate B (second in election)
 
-                const preferredTopTwo = topCandDist <= secondCandDist ? topCandidate : secondCandidate;
-                const lessPreferredTopTwo = topCandDist <= secondCandDist ? secondCandidate : topCandidate;
+                    // Determine which one the voter prefers
+                    const topCandDist = computeDistance(voterPos, candidates[topCandidate]);
+                    const secondCandDist = computeDistance(voterPos, candidates[secondCandidate]);
 
-                // Check what this voter is currently approving (accounting for basic strategy)
-                const currentThreshold = prevStep.thresholds[voterIdx];
-                const currentApprovals = getCurrentApprovals(voterPos, currentThreshold);
+                    const preferredTopTwo = topCandDist <= secondCandDist ? topCandidate : secondCandidate;
 
-                const currentlyApprovingTop = currentApprovals.has(topCandidate);
-                const currentlyApprovingSecond = currentApprovals.has(secondCandidate);
+                    // Check what this voter is currently approving
+                    const currentThreshold = prevStep.thresholds[voterIdx];
+                    const currentApprovals = getCurrentApprovals(voterPos, currentThreshold, currentFrontrunners);
 
-                // Rule 2: If currently approving exactly one of the top two, don't change
-                const approvingExactlyOne = (currentlyApprovingTop && !currentlyApprovingSecond) ||
-                    (!currentlyApprovingTop && currentlyApprovingSecond);
+                    const currentlyApprovingTop = currentApprovals.has(topCandidate);
+                    const currentlyApprovingSecond = currentApprovals.has(secondCandidate);
 
-                if (approvingExactlyOne) {
-                    // Keep current threshold
-                    return currentThreshold;
-                }
+                    // Rule 2: If currently approving exactly one of the top two, don't change
+                    const approvingExactlyOne = (currentlyApprovingTop && !currentlyApprovingSecond) ||
+                        (!currentlyApprovingTop && currentlyApprovingSecond);
 
-                // Rule 3: Approve the preferred top candidate and all those preferred to them
-                // Find distance to preferred top candidate
-                const preferredDist = computeDistance(voterPos, candidates[preferredTopTwo]);
+                    if (approvingExactlyOne) {
+                        // Keep current threshold
+                        return currentThreshold;
+                    }
 
-                // Set threshold to include preferred candidate and all closer ones
-                // Use epsilon to ensure we include the preferred candidate
-                return preferredDist + epsilon;
-            });
+                    // Rule 3: Approve the preferred top candidate and all those preferred to them
+                    // Find distance to preferred top candidate
+                    const preferredDist = computeDistance(voterPos, candidates[preferredTopTwo]);
+
+                    // Set threshold to include preferred candidate and all closer ones
+                    // Use epsilon to ensure we include the preferred candidate
+                    return preferredDist + epsilon;
+                });
+            }
 
             // Apply asynchronous updates: only update a fraction of voters
             const updatedThresholds = voters.map((voterPos, voterIdx) => {
@@ -1417,7 +1710,43 @@ function VotingAnalysis() {
                 }
             });
 
-            const currentStep = computeStep(updatedThresholds);
+            // For leaderRule, also track per-voter frontrunners for async updates
+            let updatedVoterFrontrunners = voterFrontrunners;
+            if (strategyType === 'leaderRule') {
+                updatedVoterFrontrunners = voters.map((voterPos, voterIdx) => {
+                    // Check if this voter is a sincere voter (never changes strategy)
+                    const sincereRng = seededRandom(voterSeed * 10000 + voterIdx);
+                    const isSincereVoter = sincereRng() < sincereVoterProportion;
+
+                    if (isSincereVoter) {
+                        // Sincere voters don't update their frontrunner response
+                        return prevStep.voterFrontrunners ? prevStep.voterFrontrunners[voterIdx] : null;
+                    }
+
+                    // For strategic voters: randomly decide if this voter updates
+                    const rng = seededRandom(voterSeed + stepNum * 1000 + voterIdx);
+                    if (rng() < asyncUpdateRate) {
+                        // Update to respond to new poll results
+                        return newFrontrunners;
+                    } else {
+                        // Keep responding to previous frontrunners
+                        return prevStep.voterFrontrunners ? prevStep.voterFrontrunners[voterIdx] : null;
+                    }
+                });
+                voterFrontrunners = updatedVoterFrontrunners;
+            }
+
+            // Update current frontrunners for leaderRule
+            if (strategyType === 'leaderRule') {
+                currentFrontrunners = newFrontrunners;
+            }
+
+            const currentStep = computeStep(updatedThresholds, currentFrontrunners, updatedVoterFrontrunners);
+
+            // Update frontrunners for next iteration
+            if (strategyType === 'leaderRule') {
+                currentFrontrunners = currentStep.frontrunnersObj;
+            }
 
             // Compute ballot transitions from previous step
             const transitions = {};
@@ -1439,6 +1768,7 @@ function VotingAnalysis() {
                 stepNumber: stepNum,
                 ...currentStep,
                 thresholds: [...updatedThresholds],
+                voterFrontrunners: strategyType === 'leaderRule' ? [...updatedVoterFrontrunners] : null,
                 transitions,
                 votersUnchanged
             });
@@ -1514,6 +1844,15 @@ function VotingAnalysis() {
         setNumSimulations(1000);
         setDistributionType('uniform');
         setMaxRanksAllowed(4);
+        // Strategy
+        setStrategyType('threshold');
+        setUseBasicStrategy(false);
+        setSincereThreshold(0.15);
+        setAsyncUpdateRate(0.4);
+        setSincereVoterProportion(0.0);
+        // Clear simulation results
+        setTurnBasedResults(null);
+        setSincereMCResults(null);
 
         // Clear URL parameters
         window.history.replaceState({}, '', window.location.pathname);
@@ -2320,15 +2659,45 @@ function VotingAnalysis() {
                 </div>
 
                 <div style={{ marginBottom: '15px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '5px', color: '#cbd5e1' }}>
+                        Voter Strategy:
+                    </label>
+                    <select
+                        value={strategyType}
+                        onChange={(e) => {
+                            setStrategyType(e.target.value);
+                            // Reset turn-based results when strategy changes
+                            setTurnBasedResults(null);
+                            setSincereMCResults(null);
+                        }}
+                        style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #14b8a6', fontSize: '14px', backgroundColor: '#0f172a', color: '#e2e8f0', cursor: 'pointer' }}
+                    >
+                        <option value="threshold">Approval Polls Assumption</option>
+                        <option value="leaderRule">Leader Rule</option>
+                    </select>
+                    <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', fontStyle: 'italic' }}>
+                        {strategyType === 'threshold' && 'Voters approve all candidates within their threshold distance. In turn-based mode, they strategically adjust to support their preferred frontrunner.'}
+                        {strategyType === 'leaderRule' && 'Voters approve all candidates strictly preferred to the poll leader. If they prefer the leader over the challenger, they also approve the leader.'}
+                    </p>
+                </div>
+
+                <div style={{ marginBottom: '15px' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#cbd5e1' }}>
                         <input
                             type="checkbox"
                             checked={useBasicStrategy}
-                            onChange={(e) => setUseBasicStrategy(e.target.checked)}
+                            onChange={(e) => {
+                                setUseBasicStrategy(e.target.checked);
+                                setTurnBasedResults(null);
+                                setSincereMCResults(null);
+                            }}
                             style={{ width: '16px', height: '16px', cursor: 'pointer' }}
                         />
                         <span>Use basic strategy (always approve closest, never approve furthest)</span>
                     </label>
+                    <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', fontStyle: 'italic', marginLeft: '24px' }}>
+                        When enabled, voters will always approve their closest candidate and never approve their furthest, regardless of the strategy above.
+                    </p>
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px', marginBottom: '15px' }}>
@@ -2447,69 +2816,111 @@ function VotingAnalysis() {
                     )}
                 </div>
 
+                {/* Show initial poll results for leader rule */}
+                {strategyType === 'leaderRule' && sincereThresholdResults.initialPollResults && (
+                    <div style={{ padding: '10px', backgroundColor: '#1e293b', borderRadius: '6px', border: '1px solid #6366f1', marginBottom: '10px', display: 'none' }}>
+                        <p style={{ fontSize: '13px', color: '#a5b4fc', marginBottom: '0' }}>
+                            <strong>Initial Poll Results:</strong> Leader = <span style={{ color: '#34d399' }}>{getLabel(sincereThresholdResults.initialPollResults.leader)}</span>,
+                            Challenger = <span style={{ color: '#fbbf24' }}>{getLabel(sincereThresholdResults.initialPollResults.challenger)}</span>
+                        </p>
+                    </div>
+                )}
+
+                {/* Checkbox to toggle between initial and final approvals - only show when flag is true */}
+                {showInitialFinalToggle && (
+                    <div style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#cbd5e1' }}>
+                            <input
+                                type="checkbox"
+                                checked={showInitialApprovals}
+                                onChange={(e) => setShowInitialApprovals(e.target.checked)}
+                                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                            />
+                            <span>
+                                Show initial approvals (before {strategyType === 'leaderRule' ? 'leader rule' : useBasicStrategy ? 'basic strategy' : 'strategy'} applied)
+                            </span>
+                        </label>
+                    </div>
+                )}
+
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '15px' }}>
                     <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #0d9488' }}>
                         <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#5eead4' }}>
-                            Approval Votes by Candidate
+                            Approval Votes by Candidate {showInitialApprovals && '(Initial)'}
                         </h4>
-                        {/* Show count of voters who cast no approvals, if any */}
-                        {((sincereThresholdResults.votesDistribution && sincereThresholdResults.votesDistribution[0]) || 0) > 0 && (() => {
-                            const noVotes = sincereThresholdResults.votesDistribution[0] || 0;
-                            const percentage = (noVotes / sincereThresholdResults.totalVoters) * 100;
+                        {/* Use initial or final approval counts based on toggle */}
+                        {(() => {
+                            const displayCounts = (showInitialApprovals && sincereThresholdResults.initialApprovalCounts)
+                                ? sincereThresholdResults.initialApprovalCounts
+                                : sincereThresholdResults.approvalCounts;
+
+                            // Calculate winner from the displayed counts
+                            const displayWinner = Object.entries(displayCounts)
+                                .sort((a, b) => b[1] - a[1])[0][0];
+
                             return (
-                                <div key="no-vote" style={{ marginBottom: '10px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                                        <span style={{ fontSize: '14px', color: '#e2e8f0' }}>
-                                            No Vote
-                                        </span>
-                                        <span style={{ fontSize: '13px', color: '#cbd5e1' }}>
-                                            {noVotes} ({percentage.toFixed(1)}%)
-                                        </span>
-                                    </div>
-                                    <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
-                                        <div
-                                            style={{
-                                                width: percentage + '%',
-                                                height: '100%',
-                                                backgroundColor: '#6b7280',
-                                                transition: 'width 0.3s ease'
-                                            }}
-                                        ></div>
-                                    </div>
-                                </div>
+                                <>
+                                    {/* Show count of voters who cast no approvals, if any */}
+                                    {((sincereThresholdResults.votesDistribution && sincereThresholdResults.votesDistribution[0]) || 0) > 0 && (() => {
+                                        const noVotes = sincereThresholdResults.votesDistribution[0] || 0;
+                                        const percentage = (noVotes / sincereThresholdResults.totalVoters) * 100;
+                                        return (
+                                            <div key="no-vote" style={{ marginBottom: '10px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                                    <span style={{ fontSize: '14px', color: '#e2e8f0' }}>
+                                                        No Vote
+                                                    </span>
+                                                    <span style={{ fontSize: '13px', color: '#cbd5e1' }}>
+                                                        {noVotes} ({percentage.toFixed(1)}%)
+                                                    </span>
+                                                </div>
+                                                <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                                    <div
+                                                        style={{
+                                                            width: percentage + '%',
+                                                            height: '100%',
+                                                            backgroundColor: '#6b7280',
+                                                            transition: 'width 0.3s ease'
+                                                        }}
+                                                    ></div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+
+                                    {Object.entries(displayCounts)
+                                        .sort((a, b) => b[1] - a[1])
+                                        .map(([cand, votes]) => {
+                                            const percentage = (votes / sincereThresholdResults.totalVoters) * 100;
+                                            const isWinner = cand === displayWinner;
+
+                                            return (
+                                                <div key={cand} style={{ marginBottom: '10px' }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                                        <span style={{ fontSize: '14px', fontWeight: isWinner ? 'bold' : 'normal', color: '#e2e8f0' }}>
+                                                            {getLabel(cand)}
+                                                            {isWinner && <span style={{ marginLeft: '6px' }}>🏆</span>}
+                                                        </span>
+                                                        <span style={{ fontSize: '13px', fontWeight: isWinner ? 'bold' : 'normal', color: '#cbd5e1' }}>
+                                                            {votes} ({percentage.toFixed(1)}%)
+                                                        </span>
+                                                    </div>
+                                                    <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                                        <div
+                                                            style={{
+                                                                width: percentage + '%',
+                                                                height: '100%',
+                                                                backgroundColor: isWinner ? '#14b8a6' : '#475569',
+                                                                transition: 'width 0.3s ease'
+                                                            }}
+                                                        ></div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                </>
                             );
                         })()}
-
-                        {Object.entries(sincereThresholdResults.approvalCounts)
-                            .sort((a, b) => b[1] - a[1])
-                            .map(([cand, votes]) => {
-                                const percentage = (votes / sincereThresholdResults.totalVoters) * 100;
-                                const isWinner = cand === sincereThresholdResults.winner;
-
-                                return (
-                                    <div key={cand} style={{ marginBottom: '10px' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                                            <span style={{ fontSize: '14px', fontWeight: isWinner ? 'bold' : 'normal', color: '#e2e8f0' }}>
-                                                {getLabel(cand)}
-                                                {isWinner && <span style={{ marginLeft: '6px' }}>🏆</span>}
-                                            </span>
-                                            <span style={{ fontSize: '13px', fontWeight: isWinner ? 'bold' : 'normal', color: '#cbd5e1' }}>
-                                                {votes} ({percentage.toFixed(1)}%)
-                                            </span>
-                                        </div>
-                                        <div style={{ height: '24px', backgroundColor: '#1e293b', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
-                                            <div
-                                                style={{
-                                                    width: percentage + '%',
-                                                    height: '100%',
-                                                    backgroundColor: isWinner ? '#14b8a6' : '#475569',
-                                                    transition: 'width 0.3s ease'
-                                                }}
-                                            ></div>
-                                        </div>
-                                    </div>
-                                );
-                            })}
 
                         <div style={{ marginTop: '8px', fontSize: '12px', color: '#94a3b8' }}>
                             {condorcetInfo.winner && condorcetInfo.winner !== 'None' ? (
@@ -2522,17 +2933,23 @@ function VotingAnalysis() {
 
                     <div style={{ backgroundColor: '#0f172a', padding: '15px', borderRadius: '6px', border: '1px solid #0d9488' }}>
                         <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '12px', color: '#5eead4' }}>
-                            Votes Cast per Voter
+                            Votes Cast per Voter {showInitialApprovals && '(Initial)'}
                         </h4>
-                        {Object.entries(sincereThresholdResults.votesDistribution)
-                            .filter(([count, voters]) => voters > 0)
-                            .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
-                            .map(([count, voters]) => {
-                                const percentage = (voters / sincereThresholdResults.totalVoters) * 100;
-                                const maxVoters = Math.max(...Object.values(sincereThresholdResults.votesDistribution));
-                                const relativeWidth = (voters / maxVoters) * 100;
+                        {(() => {
+                            // Use initial or final votes distribution based on toggle
+                            const displayVotesDistribution = (showInitialApprovals && sincereThresholdResults.initialVotesDistribution)
+                                ? sincereThresholdResults.initialVotesDistribution
+                                : sincereThresholdResults.votesDistribution;
+                            
+                            return Object.entries(displayVotesDistribution)
+                                .filter(([count, voters]) => voters > 0)
+                                .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+                                .map(([count, voters]) => {
+                                    const percentage = (voters / sincereThresholdResults.totalVoters) * 100;
+                                    const maxVoters = Math.max(...Object.values(displayVotesDistribution));
+                                    const relativeWidth = (voters / maxVoters) * 100;
 
-                                return (
+                                    return (
                                     <div key={count} style={{ marginBottom: '10px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                                             <span style={{ fontSize: '14px', color: '#e2e8f0' }}>
@@ -2554,7 +2971,8 @@ function VotingAnalysis() {
                                         </div>
                                     </div>
                                 );
-                            })}
+                            });
+                        })()}
                     </div>
                 </div>
 
@@ -2636,6 +3054,11 @@ function VotingAnalysis() {
                             <div style={{ fontSize: '13px', color: '#e9d5ff', marginBottom: '6px' }}>
                                 <strong>Final Winner:</strong> {getLabel(turnBasedResults[turnBasedResults.length - 1].winner)} (Step {turnBasedResults.length - 1})
                             </div>
+                            {strategyType === 'leaderRule' && turnBasedResults[currentStep].frontrunnersObj && (
+                                <div style={{ fontSize: '13px', color: '#e9d5ff', marginBottom: '6px' }}>
+                                    <strong>Leader/Challenger (Step {currentStep}):</strong> {getLabel(turnBasedResults[currentStep].frontrunnersObj.leader)} / {getLabel(turnBasedResults[currentStep].frontrunnersObj.challenger)}
+                                </div>
+                            )}
                             <div style={{ fontSize: '13px', color: '#e9d5ff', marginBottom: '6px' }}>
                                 <strong>Viable Candidates (Step {currentStep}):</strong> {turnBasedResults[currentStep].viableCandidates.map(c => getLabel(c)).join(', ')}
                             </div>
